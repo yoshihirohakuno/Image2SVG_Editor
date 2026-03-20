@@ -5,9 +5,10 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>画像 → SVG 変換システム | Image2SVG Editor</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link
-    href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+JP:wght@300;400;500;700&family=Noto+Serif+JP:wght@300;400;500;700&display=swap"
+    href="https://fonts.googleapis.com/css2?family=Dela+Gothic+One&family=M+PLUS+Rounded+1c:wght@400;700&family=Noto+Sans+JP:wght@300;400;500;700&family=Noto+Serif+JP:wght@300;400;500;700&family=Yusei+Magic&family=Zen+Kaku+Gothic+New:wght@400;700&display=swap"
     rel="stylesheet" />
   <style>
     :root {
@@ -408,6 +409,12 @@
               <div id="selection-box"
                 style="position:absolute; border:1px dashed var(--accent); background:rgba(124,111,247,0.15); pointer-events:none; display:none; z-index:100;">
               </div>
+              <div id="guide-x"
+                style="position:absolute; width:1px; height:100%; top:0; background:rgba(0, 255, 255, 0.5); pointer-events:none; display:none; z-index:1000;">
+              </div>
+              <div id="guide-y"
+                style="position:absolute; height:1px; width:100%; left:0; background:rgba(0, 255, 255, 0.5); pointer-events:none; display:none; z-index:1000;">
+              </div>
             </div>
           </div>
         </div>
@@ -522,6 +529,47 @@
           selectItem(null, null);
           renderCanvas();
           saveHistory();
+        }
+        return;
+      }
+
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+        if (state.selectedItems.length > 0) {
+          e.preventDefault();
+          const d = e.shiftKey ? 1.0 : 0.1;
+          state.selectedItems.forEach(item => {
+            let obj = null;
+            if (item.type === 'text') obj = state.texts.find(x => x._id === item.id);
+            if (item.type === 'shape') obj = state.shapes.find(x => x._id === item.id);
+            if (item.type === 'image') obj = state.images.find(x => x._id === item.id);
+            if (obj) {
+              if (e.key === 'ArrowUp') obj.y -= d;
+              if (e.key === 'ArrowDown') obj.y += d;
+              if (e.key === 'ArrowLeft') obj.x -= d;
+              if (e.key === 'ArrowRight') obj.x += d;
+              obj.x = parseFloat(obj.x.toFixed(2));
+              obj.y = parseFloat(obj.y.toFixed(2));
+            }
+          });
+          renderCanvas();
+          if (state.selectedItems.length === 1) {
+            const px = document.getElementById('prop-x');
+            const py = document.getElementById('prop-y');
+            if (px && py) {
+              let obj = state.texts.find(x => x._id === state.selectedItems[0].id) ||
+                state.shapes.find(x => x._id === state.selectedItems[0].id) ||
+                state.images.find(x => x._id === state.selectedItems[0].id);
+              if (obj) {
+                px.value = obj.x;
+                py.value = obj.y;
+              }
+            }
+          }
+
+          clearTimeout(window._arrowKeyHistoryTimer);
+          window._arrowKeyHistoryTimer = setTimeout(() => {
+            saveHistory();
+          }, 400);
         }
         return;
       }
@@ -662,6 +710,8 @@
       canvas.innerHTML = `
         <div class="canvas-border"></div>
         <div id="selection-box" style="position:absolute; border:1px dashed var(--accent); background:rgba(124,111,247,0.15); pointer-events:none; display:none; z-index:100;"></div>
+        <div id="guide-x" style="position:absolute; width:1.5px; height:100%; top:0; background:rgba(0, 255, 255, 0.8); box-shadow:0 0 4px rgba(0,255,255,0.4); pointer-events:none; display:none; z-index:1000;"></div>
+        <div id="guide-y" style="position:absolute; height:1.5px; width:100%; left:0; background:rgba(0, 255, 255, 0.8); box-shadow:0 0 4px rgba(0,255,255,0.4); pointer-events:none; display:none; z-index:1000;"></div>
       `;
 
       state.shapes.forEach(s => {
@@ -707,7 +757,8 @@
 
         const ff = t.font_family || (t.font_group === 'mincho' ? 'Noto Serif JP' : 'Noto Sans JP');
         if (ff === 'Noto Serif JP') el.style.fontFamily = "'Noto Serif JP', serif";
-        else el.style.fontFamily = "'Noto Sans JP', sans-serif";
+        else if (ff === 'Noto Sans JP') el.style.fontFamily = "'Noto Sans JP', sans-serif";
+        else el.style.fontFamily = `"${ff}", sans-serif`;
 
         el.style.fontWeight = t.font_weight || '400';
 
@@ -726,6 +777,9 @@
 
     let isBoxSelecting = false;
     let boxStartX = 0, boxStartY = 0;
+
+    let snapLinesX = [];
+    let snapLinesY = [];
 
     canvas.addEventListener('mousedown', e => {
       const el = e.target.closest('.ce');
@@ -776,6 +830,20 @@
           if (item.type === 'image') d = state.images.find(x => x._id === item.id);
           return { item: d, el: document.querySelector(`.ce[data-id="${item.id}"]`), startX: d.x, startY: d.y };
         }).filter(x => x.item);
+
+        snapLinesX = [];
+        snapLinesY = [];
+        [...state.texts, ...state.shapes, ...state.images].forEach(item => {
+          if (state.selectedItems.some(si => si.id === item._id)) return;
+          const el = document.querySelector(`.ce[data-id="${item._id}"]`);
+          if (!el) return;
+          const w = el.offsetWidth / 10;
+          const h = el.offsetHeight / 10;
+          snapLinesX.push(item.x, item.x + w / 2, item.x + w);
+          snapLinesY.push(item.y, item.y + h / 2, item.y + h);
+        });
+        snapLinesX = [...new Set(snapLinesX)].sort((a, b) => a - b);
+        snapLinesY = [...new Set(snapLinesY)].sort((a, b) => a - b);
       }
     });
 
@@ -806,8 +874,61 @@
       if (!isDragging || dragInitialStates.length === 0) return;
       const canvasRect = canvas.getBoundingClientRect();
 
-      const deltaX = (e.clientX - dragStartX) / scale / 10;
-      const deltaY = (e.clientY - dragStartY) / scale / 10;
+      let deltaX = (e.clientX - dragStartX) / scale / 10;
+      let deltaY = (e.clientY - dragStartY) / scale / 10;
+
+      let snapGuideX = null;
+      let snapGuideY = null;
+
+      if (dragInitialStates.length === 1 && !e.altKey) {
+        const d = dragInitialStates[0];
+        const w = d.el.offsetWidth / 10;
+        const h = d.el.offsetHeight / 10;
+        const SNAP_DIST = 1.0;
+
+        const testX = [
+          { val: d.startX + deltaX, offset: 0 },
+          { val: d.startX + deltaX + w / 2, offset: w / 2 },
+          { val: d.startX + deltaX + w, offset: w }
+        ];
+        let minDX = SNAP_DIST;
+        testX.forEach(edge => {
+          snapLinesX.forEach(line => {
+            if (Math.abs(edge.val - line) < minDX) {
+              minDX = Math.abs(edge.val - line);
+              deltaX = line - (d.startX + edge.offset);
+              snapGuideX = line;
+            }
+          });
+        });
+
+        const testY = [
+          { val: d.startY + deltaY, offset: 0 },
+          { val: d.startY + deltaY + h / 2, offset: h / 2 },
+          { val: d.startY + deltaY + h, offset: h }
+        ];
+        let minDY = SNAP_DIST;
+        testY.forEach(edge => {
+          snapLinesY.forEach(line => {
+            if (Math.abs(edge.val - line) < minDY) {
+              minDY = Math.abs(edge.val - line);
+              deltaY = line - (d.startY + edge.offset);
+              snapGuideY = line;
+            }
+          });
+        });
+      }
+
+      const gx = document.getElementById('guide-x');
+      const gy = document.getElementById('guide-y');
+      if (gx) {
+        if (snapGuideX !== null) { gx.style.left = (snapGuideX * 10) + 'px'; gx.style.display = 'block'; }
+        else gx.style.display = 'none';
+      }
+      if (gy) {
+        if (snapGuideY !== null) { gy.style.top = (snapGuideY * 10) + 'px'; gy.style.display = 'block'; }
+        else gy.style.display = 'none';
+      }
 
       if (Math.abs(deltaX) > 0.1 || Math.abs(deltaY) > 0.1) dragMoved = true;
 
@@ -829,6 +950,11 @@
     });
 
     window.addEventListener('mouseup', e => {
+      const gx = document.getElementById('guide-x');
+      const gy = document.getElementById('guide-y');
+      if (gx) gx.style.display = 'none';
+      if (gy) gy.style.display = 'none';
+
       if (isBoxSelecting) {
         isBoxSelecting = false;
         const selBox = document.getElementById('selection-box');
@@ -967,6 +1093,32 @@
           '</div>';
       };
 
+      const FONT_OPTIONS = [
+        { family: 'Noto Sans JP', weight: '300', label: 'Noto Sans (Light)' },
+        { family: 'Noto Sans JP', weight: '400', label: 'Noto Sans (Regular)' },
+        { family: 'Noto Sans JP', weight: '500', label: 'Noto Sans (Medium)' },
+        { family: 'Noto Sans JP', weight: '700', label: 'Noto Sans (Bold)' },
+        { family: 'Noto Serif JP', weight: '300', label: 'Noto Serif (Light)' },
+        { family: 'Noto Serif JP', weight: '400', label: 'Noto Serif (Regular)' },
+        { family: 'Noto Serif JP', weight: '500', label: 'Noto Serif (Medium)' },
+        { family: 'Noto Serif JP', weight: '700', label: 'Noto Serif (Bold)' },
+        { family: 'M PLUS Rounded 1c', weight: '400', label: '丸ゴシック (Regular)' },
+        { family: 'M PLUS Rounded 1c', weight: '700', label: '丸ゴシック (Bold)' },
+        { family: 'Zen Kaku Gothic New', weight: '400', label: 'Zen 角ゴシック (Regular)' },
+        { family: 'Zen Kaku Gothic New', weight: '700', label: 'Zen 角ゴシック (Bold)' },
+        { family: 'Yusei Magic', weight: '400', label: '手書き風 (油性マジック)' },
+        { family: 'Dela Gothic One', weight: '400', label: '極太ディスプレイ' }
+      ];
+
+      const buildFontSelect = (selectedFF, selectedFW, isMulti = false) => {
+        let opts = isMulti ? '<option value="">--維持--</option>' : '';
+        FONT_OPTIONS.forEach(f => {
+          const isSel = (f.family === selectedFF && f.weight === String(selectedFW));
+          opts += `<option value="${f.family}|${f.weight}" ${isSel ? 'selected' : ''}>${f.label}</option>`;
+        });
+        return opts;
+      };
+
       if (state.selectedItems.length === 0) {
         propIdLabel.textContent = '';
         propsPanel.innerHTML = '<div class="empty-state">キャンバス上の要素をクリックして編集<br><br><small style="color:var(--text-muted)">Shift+クリックで複数選択<br>ドラッグで範囲選択</small></div>';
@@ -990,21 +1142,9 @@
             <label style="margin-bottom:12px">一括変更アシスト</label>
             <div class="prop-row prop-group">
               <div style="flex:1">
-                 <label>フォント（テキストのみ）</label>
-                 <select id="prop-multi-font-family">
-                     <option value="">--維持--</option>
-                     <option value="Noto Sans JP">ゴシック (Noto Sans)</option>
-                     <option value="Noto Serif JP">明朝 (Noto Serif)</option>
-                 </select>
-              </div>
-              <div style="flex:1">
-                 <label>太さ（テキストのみ）</label>
-                 <select id="prop-multi-font-weight">
-                     <option value="">--維持--</option>
-                     <option value="300">Light (300)</option>
-                     <option value="400">Regular (400)</option>
-                     <option value="500">Medium (500)</option>
-                     <option value="700">Bold (700)</option>
+                 <label>フォント＆太さ（テキストのみ）</label>
+                 <select id="prop-multi-font-select">
+                     ${buildFontSelect('', '', true)}
                  </select>
               </div>
             </div>
@@ -1038,8 +1178,23 @@
           });
         };
 
-        bindMulti('prop-multi-font-family', 'font_family', false);
-        bindMulti('prop-multi-font-weight', 'font_weight', false);
+        const fontSelectMulti = document.getElementById('prop-multi-font-select');
+        if (fontSelectMulti) {
+          fontSelectMulti.addEventListener('change', e => {
+            if (e.target.value === '') return;
+            const [ff, fw] = e.target.value.split('|');
+            state.selectedItems.filter(i => i.type === 'text').forEach(item => {
+              const textObj = state.texts.find(x => x._id === item.id);
+              if (textObj) {
+                textObj.font_family = ff;
+                textObj.font_weight = parseInt(fw) || 400;
+              }
+            });
+            renderCanvas();
+            saveHistory();
+          });
+        }
+
         bindMulti('prop-multi-ls', 'letter_spacing', true);
 
         const fsInput = document.getElementById('prop-multi-fs-pt');
@@ -1108,19 +1263,9 @@
           </div>
           <div class="prop-row prop-group">
             <div style="flex:1">
-               <label>フォント</label>
-               <select id="prop-font-family">
-                   <option value="Noto Sans JP" ${d.font_family === 'Noto Sans JP' ? 'selected' : ''}>ゴシック (Noto Sans)</option>
-                   <option value="Noto Serif JP" ${d.font_family === 'Noto Serif JP' ? 'selected' : ''}>明朝 (Noto Serif)</option>
-               </select>
-            </div>
-            <div style="flex:1">
-               <label>太さ(Weight)</label>
-               <select id="prop-font-weight">
-                   <option value="300" ${String(d.font_weight) === '300' ? 'selected' : ''}>Light (300)</option>
-                   <option value="400" ${String(d.font_weight) === '400' ? 'selected' : ''}>Regular (400)</option>
-                   <option value="500" ${String(d.font_weight) === '500' ? 'selected' : ''}>Medium (500)</option>
-                   <option value="700" ${String(d.font_weight) === '700' ? 'selected' : ''}>Bold (700)</option>
+               <label>フォント＆太さ</label>
+               <select id="prop-font-select">
+                   ${buildFontSelect(d.font_family || 'Noto Sans JP', d.font_weight || '400')}
                </select>
             </div>
           </div>
@@ -1165,8 +1310,17 @@
       bind('prop-w', 'w', true);
       bind('prop-h', 'h', true);
       bind('prop-text', 'text', false, true);
-      bind('prop-font-family', 'font_family', false, true);
-      bind('prop-font-weight', 'font_weight', false, true);
+
+      const fontSelect = document.getElementById('prop-font-select');
+      if (fontSelect) {
+        fontSelect.addEventListener('change', e => {
+          const [ff, fw] = e.target.value.split('|');
+          d.font_family = ff;
+          d.font_weight = parseInt(fw) || 400;
+          renderCanvas();
+          saveHistory();
+        });
+      }
 
       const fsPtEl = document.getElementById('prop-fs-pt');
       if (fsPtEl) {

@@ -52,9 +52,13 @@ CARD_H_MM = 58.0
 
 # Google Fonts インポート用URL
 GOOGLE_FONTS_URL = (
-    "https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;700"
+    "https://fonts.googleapis.com/css2?family=Dela+Gothic+One"
+    "&family=M+PLUS+Rounded+1c:wght@400;700"
+    "&family=Noto+Sans+JP:wght@300;400;500;700"
     "&family=Noto+Serif+JP:wght@300;400;500;700"
-    "&family=Inter:wght@400;700&display=swap"
+    "&family=Yusei+Magic"
+    "&family=Zen+Kaku+Gothic+New:wght@400;700"
+    "&display=swap"
 )
 
 
@@ -145,8 +149,10 @@ def _add_text(group, dwg: Drawing, t: dict) -> None:
     
     if font_family == "Noto Serif JP":
         ff_str = "'Noto Serif JP', serif"
-    else:
+    elif font_family == "Noto Sans JP":
         ff_str = "'Noto Sans JP', sans-serif"
+    else:
+        ff_str = f"'{font_family}', sans-serif"
 
     # 静的カウンタ（IDを一意にする）
     _add_text._count = getattr(_add_text, "_count", 0) + 1
