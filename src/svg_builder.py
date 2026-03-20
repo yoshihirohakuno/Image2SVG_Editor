@@ -1,0 +1,261 @@
+"""
+svg_builder.py - SVG生成モジュール
+名刺の解析結果から 94×58mm の印刷対応SVGを生成する
+"""
+
+from __future__ import annotations
+import svgwrite
+from svgwrite import Drawing
+from src.font_mapper import get_font_family, get_font_weight
+
+
+def hex_to_cmyk_string(hex_color: str) -> str:
+    """RGB Hex (#RRGGBB) から CMYK を計算し SVG の device-cmyk() 文字列を返す"""
+    hex_color = hex_color.lstrip('#')
+    if len(hex_color) != 6:
+        return "device-cmyk(0, 0, 0, 1)"
+        
+    r = int(hex_color[0:2], 16)
+    g = int(hex_color[2:4], 16)
+    b = int(hex_color[4:6], 16)
+    
+    if r == 0 and g == 0 and b == 0:
+        return "device-cmyk(0, 0, 0, 1)"
+        
+    # K100 (純黒) へのスナップ
+    # 名刺の文字などの濃いグレーは4色ベタ塗り(Rich Black)を避けるためK単色に寄せる
+    if r < 80 and g < 80 and b < 80 and max(r,g,b) - min(r,g,b) < 15:
+        k = 1.0 - max(r, g, b) / 255.0
+        if k > 0.8:
+            k = 1.0
+        return f"device-cmyk(0, 0, 0, {round(k, 3)})"
+        
+    r_f = r / 255.0
+    g_f = g / 255.0
+    b_f = b / 255.0
+    
+    k = 1.0 - max(r_f, g_f, b_f)
+    if k == 1.0:
+        return "device-cmyk(0, 0, 0, 1)"
+        
+    c = (1.0 - r_f - k) / (1.0 - k)
+    m = (1.0 - g_f - k) / (1.0 - k)
+    y = (1.0 - b_f - k) / (1.0 - k)
+    
+    return f"device-cmyk({round(c, 3)}, {round(m, 3)}, {round(y, 3)}, {round(k, 3)})"
+
+
+
+# 名刺サイズ定数
+CARD_W_MM = 94.0
+CARD_H_MM = 58.0
+
+# Google Fonts インポート用URL
+GOOGLE_FONTS_URL = (
+    "https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;700"
+    "&family=Noto+Serif+JP:wght@300;400;500;700"
+    "&family=Inter:wght@400;700&display=swap"
+)
+
+
+def build_svg(intermediate: dict, output_path: str) -> str:
+    """
+    中間 JSON データから SVG ファイルを生成する
+
+    Parameters
+    ----------
+    intermediate : dict
+        {texts: [...], shapes: [...], ...}
+    output_path : str
+        出力先 SVG ファイルパス
+
+    Returns
+    -------
+    str
+        生成した SVG の文字列
+    """
+    dwg = Drawing(
+        output_path,
+        size=(f"{CARD_W_MM}mm", f"{CARD_H_MM}mm"),
+        viewBox=f"0 0 {CARD_W_MM} {CARD_H_MM}",
+        profile="full",
+    )
+
+    # --- スタイル定義（Google Fonts）---
+    dwg.defs.add(dwg.style(
+        f"@import url('{GOOGLE_FONTS_URL}');\n"
+        "text { font-variant-numeric: tabular-nums; }"
+    ))
+
+    # --- clipPath（枠内にクリップ）---
+    clip = dwg.defs.add(dwg.clipPath(id="card-clip"))
+    clip.add(dwg.rect(
+        insert=(0, 0),
+        size=(CARD_W_MM, CARD_H_MM),
+    ))
+
+    # --- 背景白 ---
+    bg = dwg.add(dwg.g(clip_path="url(#card-clip)"))
+    bg.add(dwg.rect(
+        insert=(0, 0),
+        size=(CARD_W_MM, CARD_H_MM),
+        fill="white",
+    ))
+
+    # --- 図形レイヤー ---
+    shape_group = dwg.add(dwg.g(id="shapes", clip_path="url(#card-clip)"))
+    for s in intermediate.get("shapes", []):
+        _add_shape(shape_group, dwg, s)
+
+    # --- 画像レイヤー（ユーザー配置ロゴなど） ---
+    image_group = dwg.add(dwg.g(id="images", clip_path="url(#card-clip)"))
+    for img_data in intermediate.get("images", []):
+        _add_image(image_group, dwg, img_data)
+
+    # --- テキストレイヤー ---
+    text_group = dwg.add(dwg.g(id="texts", clip_path="url(#card-clip)"))
+    for t in intermediate.get("texts", []):
+        _add_text(text_group, dwg, t)
+
+    # --- 外枠（マゼンタ, 0.25mm 線幅）---
+    dwg.add(dwg.rect(
+        insert=(0, 0),
+        size=(CARD_W_MM, CARD_H_MM),
+        fill="none",
+        stroke="magenta",
+        stroke_width="0.25",
+    ))
+
+    dwg.save(pretty=True)
+    return dwg.tostring()
+
+
+def _add_text(group, dwg: Drawing, t: dict) -> None:
+    """テキストブロックを SVG <text> として追加する"""
+    x = t.get("x", 0)
+    y = t.get("y", 0)
+    text_str = t.get("text", "")
+    color = t.get("color", "#000000")
+    font_group = t.get("font_group", "gothic")
+    font_size = t.get("font_size", 3)
+    letter_spacing = t.get("letter_spacing", 0.0)
+
+    font_family = t.get("font_family", "Noto Sans JP")
+    font_weight = str(t.get("font_weight", "400"))
+    
+    if font_family == "Noto Serif JP":
+        ff_str = "'Noto Serif JP', serif"
+    else:
+        ff_str = "'Noto Sans JP', sans-serif"
+
+    # 静的カウンタ（IDを一意にする）
+    _add_text._count = getattr(_add_text, "_count", 0) + 1
+    role = t.get("role", "other")
+
+    # ★ font-size は単位なし数値で指定（viewBox座標系 = mm 系）
+    #   "Xmm" の絶対単位を使うと SVG スケーリング時に座標系と乖離する
+    # ★ baseline 補正: SVG の text は baseline 基準
+    baseline_y = round(y + font_size * 0.85, 3)
+
+    extra = {}
+    if letter_spacing and letter_spacing > 0:
+        extra["letter_spacing"] = letter_spacing  # svgwrite は letter-spacing に変換
+
+    cmyk_val = hex_to_cmyk_string(color)
+    extra["style"] = f"fill: {cmyk_val};"
+
+    text_elem = dwg.text(
+        "",
+        insert=(x, baseline_y),
+        fill=color,
+        font_family=ff_str,
+        font_size=font_size,          # 単位なし = viewBox ユーザー座標 (= mm)
+        font_weight=font_weight,
+        id=f"{role}_{_add_text._count}",
+        **extra,
+    )
+
+    lines = text_str.split("\n")
+    for i, line in enumerate(lines):
+        if i == 0:
+            t_span = dwg.tspan(line, x=[x])
+        else:
+            t_span = dwg.tspan(line, x=[x], dy=["1.2em"])
+        text_elem.add(t_span)
+
+    group.add(text_elem)
+
+
+
+def _add_shape(group, dwg: Drawing, s: dict) -> None:
+    """図形データを SVG 要素として追加する"""
+    x = s.get("x", 0)
+    y = s.get("y", 0)
+    w = s.get("w", 10)
+    h = s.get("h", 10)
+    fill = s.get("fill", "#CCCCCC")
+    shape_type = s.get("type", "rect")
+    cmyk_val = hex_to_cmyk_string(fill)
+
+    if shape_type == "circle":
+        cx = x + w / 2
+        cy = y + h / 2
+        r = min(w, h) / 2
+        group.add(dwg.circle(
+            center=(cx, cy),
+            r=r,
+            fill=fill,
+            style=f"fill: {cmyk_val}; stroke: device-cmyk(0,0,0,0.4);",
+            stroke="#999999",
+            stroke_width="0.1",
+        ))
+    elif shape_type == "rounded_rect":
+        radius = min(w, h) * 0.15
+        group.add(dwg.rect(
+            insert=(x, y),
+            size=(w, h),
+            rx=radius,
+            ry=radius,
+            fill=fill,
+            style=f"fill: {cmyk_val}; stroke: device-cmyk(0,0,0,0.4);",
+            stroke="#999999",
+            stroke_width="0.1",
+        ))
+    else:  # rect
+        group.add(dwg.rect(
+            insert=(x, y),
+            size=(w, h),
+            fill=fill,
+            style=f"fill: {cmyk_val}; stroke: device-cmyk(0,0,0,0.4);",
+            stroke="#999999",
+            stroke_width="0.1",
+        ))
+
+def _add_image(group, dwg: Drawing, img_data: dict) -> None:
+    """Base64エンコードされた画像をSVG要素として追加する"""
+    x = img_data.get("x", 0)
+    y = img_data.get("y", 0)
+    w = img_data.get("w", 10)
+    h = img_data.get("h", 10)
+    href = img_data.get("href", "") # data:image/png;base64,...
+
+    if href:
+        group.add(dwg.image(
+            href=href,
+            insert=(x, y),
+            size=(w, h)
+        ))
+
+def build_svg_from_scratch(
+    texts: list[dict] | None = None,
+    shapes: list[dict] | None = None,
+    output_path: str = "output.svg",
+) -> str:
+    """
+    テキスト・図形データを直接渡して SVG を生成するユーティリティ関数
+    """
+    intermediate = {
+        "texts": texts or [],
+        "shapes": shapes or [],
+    }
+    return build_svg(intermediate, output_path)

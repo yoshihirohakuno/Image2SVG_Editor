@@ -1,0 +1,1273 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>画像 → SVG 変換システム | Image2SVG Editor</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+JP:wght@300;400;500;700&family=Noto+Serif+JP:wght@300;400;500;700&display=swap"
+    rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0a0a0f;
+      --surface: #13131a;
+      --surface2: #1c1c28;
+      --accent: #7c6ff7;
+      --accent2: #f770b0;
+      --text: #e8e8f0;
+      --text-muted: #8888aa;
+      --border: #2a2a3a;
+      --success: #4ecdc4;
+      --error: #ff6b6b;
+      --radius: 12px;
+      --radius-lg: 20px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', 'Noto Sans JP', sans-serif;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background: radial-gradient(ellipse 80% 50% at 20% 10%, rgba(124, 111, 247, .12) 0%, transparent 60%),
+        radial-gradient(ellipse 60% 40% at 80% 80%, rgba(247, 112, 176, .08) 0%, transparent 60%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .header-bar {
+      position: relative;
+      z-index: 10;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px 24px;
+      background: rgba(19, 19, 26, 0.8);
+      border-bottom: 1px solid var(--border);
+      backdrop-filter: blur(8px);
+    }
+
+    .header-title {
+      font-size: 18px;
+      font-weight: 700;
+      background: linear-gradient(120deg, var(--text), var(--accent));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .btn {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all .2s;
+    }
+
+    .btn-primary {
+      background: var(--surface2);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+
+    .btn-primary:hover {
+      background: var(--accent);
+      color: white;
+      border-color: var(--accent);
+      transform: translateY(-1px);
+    }
+
+    .btn-success {
+      background: var(--success);
+      color: #111;
+    }
+
+    .btn-success:hover {
+      background: #38b2ac;
+    }
+
+    .btn-danger {
+      background: rgba(255, 107, 107, 0.1);
+      color: var(--error);
+      border: 1px solid var(--error);
+    }
+
+    .btn-danger:hover {
+      background: rgba(255, 107, 107, 0.2);
+    }
+
+    .content-area {
+      flex: 1;
+      display: flex;
+      position: relative;
+      z-index: 1;
+      overflow: hidden;
+    }
+
+    /* ── アップロード画面 ── */
+    #upload-view {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg);
+      z-index: 5;
+    }
+
+    .upload-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 40px;
+      width: 100%;
+      max-width: 600px;
+      text-align: center;
+    }
+
+    #drop-zone {
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 50px 20px;
+      cursor: pointer;
+      transition: all .25s;
+      background: var(--surface2);
+    }
+
+    #drop-zone.drag-over {
+      border-color: var(--accent);
+      background: rgba(124, 111, 247, .08);
+      transform: scale(1.02);
+    }
+
+    .drop-icon {
+      font-size: 48px;
+      opacity: .7;
+      margin-bottom: 12px;
+    }
+
+    .drop-text {
+      font-size: 16px;
+      font-weight: 500;
+      margin-bottom: 4px;
+    }
+
+    .drop-hint {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    /* ── エディター画面 ── */
+    #editor-view {
+      display: none;
+      width: 100%;
+      height: 100%;
+    }
+
+    .editor-layout {
+      display: flex;
+      width: 100%;
+      height: 100%;
+    }
+
+    .canvas-pane {
+      flex: 1;
+      background: #000;
+      overflow: auto;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 40px;
+    }
+
+    .canvas-wrapper {
+      position: relative;
+      width: 940px;
+      height: 580px;
+      background: white;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+      transform-origin: center center;
+    }
+
+    .canvas-border {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      border: 1px solid #ff00ff;
+      opacity: 0.3;
+    }
+
+    .ce {
+      position: absolute;
+      cursor: grab;
+      user-select: none;
+      transform-origin: top left;
+    }
+
+    .ce:active {
+      cursor: grabbing;
+    }
+
+    .ce-text {
+      white-space: nowrap;
+      line-height: 1;
+    }
+
+    .ce-image {
+      object-fit: contain;
+      -webkit-user-drag: none;
+    }
+
+    .ce-shape {
+      border: 1px solid rgba(0, 0, 0, 0.1);
+    }
+
+    .ce.selected {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    .ce:hover::after {
+      content: '';
+      position: absolute;
+      inset: -2px;
+      border: 1px dashed rgba(124, 111, 247, 0.5);
+      pointer-events: none;
+    }
+
+    .color-palette {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 6px;
+      margin-top: 8px;
+    }
+
+    .color-swatch {
+      width: 100%;
+      aspect-ratio: 1;
+      border-radius: 4px;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      cursor: pointer;
+      transition: transform 0.1s;
+    }
+
+    .color-swatch:hover {
+      transform: scale(1.1);
+      border-color: #fff;
+    }
+
+    /* 右パネル */
+    .props-pane {
+      width: 320px;
+      background: var(--surface);
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .props-header {
+      padding: 16px;
+      border-bottom: 1px solid var(--border);
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .props-body {
+      padding: 16px;
+      overflow-y: auto;
+      flex: 1;
+    }
+
+    .prop-group {
+      margin-bottom: 16px;
+    }
+
+    .prop-group label {
+      display: block;
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+    }
+
+    .prop-group input,
+    .prop-group textarea,
+    .prop-group select {
+      width: 100%;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      padding: 8px 12px;
+      font-size: 13px;
+      font-family: inherit;
+      transition: border-color 0.2s;
+    }
+
+    .prop-group input:focus,
+    .prop-group textarea:focus {
+      border-color: var(--accent);
+      outline: none;
+    }
+
+    .prop-group textarea {
+      resize: vertical;
+      min-height: 60px;
+    }
+
+    .prop-row {
+      display: flex;
+      gap: 8px;
+    }
+
+    .empty-state {
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 13px;
+      padding: 40px 20px;
+    }
+
+    .tools-pane {
+      padding: 16px;
+      border-top: 1px solid var(--border);
+      background: var(--surface2);
+    }
+
+    .loader {
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(255, 255, 255, .3);
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      display: inline-block;
+      vertical-align: middle;
+      margin-right: 8px;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+  </style>
+</head>
+
+<body>
+
+  <header class="header-bar">
+    <div class="header-title">Image2SVG Editor</div>
+    <div id="header-actions" style="display:none">
+      <button id="dl-svg-btn" class="btn btn-success">⬇ SVGを生成 & ダウンロード</button>
+    </div>
+  </header>
+
+  <div class="content-area">
+    <div id="upload-view">
+      <div class="upload-card">
+        <h2 style="margin-bottom:8px">名刺画像をアップロード</h2>
+        <p style="color:var(--text-muted);font-size:14px;margin-bottom:24px">OCRでテキストを自動解析し、編集可能なレイアウトを生成します。</p>
+
+        <div id="drop-zone">
+          <div class="drop-icon">📇</div>
+          <div class="drop-text">ここに画像をドロップ</div>
+          <div class="drop-hint" id="drop-hint-text">PNG / JPG / PDF 対応</div>
+          <input type="file" id="file-input" accept=".png,.jpg,.jpeg,.pdf" style="display:none" />
+        </div>
+      </div>
+    </div>
+
+    <div id="editor-view">
+      <div class="editor-layout">
+        <div class="canvas-pane" id="canvas-pane">
+          <div id="canvas-scaler" style="position:relative; transition: width 0.2s, height 0.2s;">
+            <div class="canvas-wrapper" id="canvas" style="transform-origin: top left;">
+              <div class="canvas-border"></div>
+              <div id="selection-box"
+                style="position:absolute; border:1px dashed var(--accent); background:rgba(124,111,247,0.15); pointer-events:none; display:none; z-index:100;">
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="props-pane">
+          <div class="props-header">
+            <span>プロパティ</span>
+            <span id="prop-id" style="color:var(--accent2);font-size:11px"></span>
+          </div>
+          <div class="props-body" id="props-panel">
+            <div class="empty-state">キャンバス上の要素をクリックして編集<br><br><small
+                style="color:var(--text-muted)">Shift+クリックで複数選択<br>ドラッグで範囲選択</small></div>
+          </div>
+          <div class="tools-pane">
+            <button id="add-logo-btn" class="btn btn-primary"
+              style="width:100%; background:var(--accent); color:white; border:none;">+ 画像(ロゴ)を追加</button>
+            <input type="file" id="logo-input" accept="image/*" style="display:none" />
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ── グローバル状態 ──
+    const state = {
+      texts: [], shapes: [], images: [],
+      selectedItems: [] // Array of {id, type}
+    };
+
+    let clipboard = [];
+    let pasteOffset = 0;
+
+    const uploadView = document.getElementById('upload-view');
+    const editorView = document.getElementById('editor-view');
+    const dropZone = document.getElementById('drop-zone');
+    const dropHintText = document.getElementById('drop-hint-text');
+    const fileInput = document.getElementById('file-input');
+    const headerActions = document.getElementById('header-actions');
+    const dlSvgBtn = document.getElementById('dl-svg-btn');
+
+    const canvasPane = document.getElementById('canvas-pane');
+    const canvas = document.getElementById('canvas');
+    const propsPanel = document.getElementById('props-panel');
+    const propIdLabel = document.getElementById('prop-id');
+    const addLogoBtn = document.getElementById('add-logo-btn');
+    const logoInput = document.getElementById('logo-input');
+
+    let scale = 1.0;
+
+    // ── 履歴 (Undo/Redo) ──
+    const historyMax = 30;
+    let historyState = [];
+    let historyIndex = -1;
+
+    function saveHistory() {
+      const snapshot = JSON.stringify({
+        texts: state.texts,
+        shapes: state.shapes,
+        images: state.images
+      });
+
+      if (historyIndex >= 0 && historyState[historyIndex] === snapshot) return;
+
+      if (historyIndex < historyState.length - 1) {
+        historyState = historyState.slice(0, historyIndex + 1);
+      }
+
+      historyState.push(snapshot);
+      if (historyState.length > historyMax) historyState.shift();
+      else historyIndex++;
+    }
+
+    function undo() {
+      if (historyIndex > 0) {
+        historyIndex--;
+        restoreSnapshot(historyState[historyIndex]);
+      }
+    }
+
+    function redo() {
+      if (historyIndex < historyState.length - 1) {
+        historyIndex++;
+        restoreSnapshot(historyState[historyIndex]);
+      }
+    }
+
+    function restoreSnapshot(snap) {
+      const data = JSON.parse(snap);
+      state.texts = data.texts;
+      state.shapes = data.shapes;
+      state.images = data.images;
+
+      const valid = [...state.texts, ...state.shapes, ...state.images].map(x => x._id);
+      state.selectedItems = state.selectedItems.filter(i => valid.includes(i.id));
+
+      renderCanvas();
+      renderProperties();
+    }
+
+    window.addEventListener('keydown', e => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (state.selectedItems.length > 0) {
+          e.preventDefault();
+          state.selectedItems.forEach(item => {
+            if (item.type === 'text') state.texts = state.texts.filter(x => x._id !== item.id);
+            if (item.type === 'shape') state.shapes = state.shapes.filter(x => x._id !== item.id);
+            if (item.type === 'image') state.images = state.images.filter(x => x._id !== item.id);
+          });
+          selectItem(null, null);
+          renderCanvas();
+          saveHistory();
+        }
+        return;
+      }
+
+      const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+      const isCtrl = isMac ? e.metaKey : e.ctrlKey;
+      if (!isCtrl) return;
+
+      if (e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
+      } else if (e.key.toLowerCase() === 'y') {
+        e.preventDefault();
+        redo();
+      } else if (e.key.toLowerCase() === 'c') {
+        if (state.selectedItems.length > 0) {
+          e.preventDefault();
+          clipboard = state.selectedItems.map(item => {
+            let obj = null;
+            if (item.type === 'text') obj = state.texts.find(x => x._id === item.id);
+            if (item.type === 'shape') obj = state.shapes.find(x => x._id === item.id);
+            if (item.type === 'image') obj = state.images.find(x => x._id === item.id);
+            return { type: item.type, data: JSON.parse(JSON.stringify(obj)) };
+          }).filter(x => x.data);
+          pasteOffset = 10;
+        }
+      } else if (e.key.toLowerCase() === 'x') {
+        if (state.selectedItems.length > 0) {
+          e.preventDefault();
+          clipboard = state.selectedItems.map(item => {
+            let obj = null;
+            if (item.type === 'text') obj = state.texts.find(x => x._id === item.id);
+            if (item.type === 'shape') obj = state.shapes.find(x => x._id === item.id);
+            if (item.type === 'image') obj = state.images.find(x => x._id === item.id);
+            return { type: item.type, data: JSON.parse(JSON.stringify(obj)) };
+          }).filter(x => x.data);
+          pasteOffset = 0;
+
+          state.selectedItems.forEach(item => {
+            if (item.type === 'text') state.texts = state.texts.filter(x => x._id !== item.id);
+            if (item.type === 'shape') state.shapes = state.shapes.filter(x => x._id !== item.id);
+            if (item.type === 'image') state.images = state.images.filter(x => x._id !== item.id);
+          });
+          state.selectedItems = [];
+          renderCanvas();
+          renderProperties();
+          saveHistory();
+        }
+      } else if (e.key.toLowerCase() === 'v') {
+        if (clipboard.length > 0) {
+          e.preventDefault();
+          const newSelected = [];
+          clipboard.forEach(clip => {
+            const newId = (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : ('id_' + Math.random().toString(36).substr(2, 9));
+            const newObj = JSON.parse(JSON.stringify(clip.data));
+            newObj._id = newId;
+            newObj.x += pasteOffset;
+            newObj.y += pasteOffset;
+
+            if (clip.type === 'text') state.texts.push(newObj);
+            if (clip.type === 'shape') state.shapes.push(newObj);
+            if (clip.type === 'image') state.images.push(newObj);
+
+            newSelected.push({ id: newId, type: clip.type });
+          });
+          state.selectedItems = newSelected;
+          pasteOffset += 10;
+          renderCanvas();
+          renderProperties();
+          saveHistory();
+        }
+      }
+    });
+
+    // ── ファイルドロップ ──
+    dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+    dropZone.addEventListener('drop', e => { e.preventDefault(); dropZone.classList.remove('drag-over'); if (e.dataTransfer.files[0]) processFile(e.dataTransfer.files[0]); });
+    dropZone.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', e => { if (e.target.files[0]) processFile(e.target.files[0]); });
+
+    async function processFile(file) {
+      dropHintText.innerHTML = '<span class="loader"></span>解析中... (初回は数十秒かかります)';
+      dropZone.style.pointerEvents = 'none';
+
+      const fd = new FormData();
+      fd.append('file', file);
+      try {
+        const res = await fetch('/api/convert', { method: 'POST', body: fd });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+
+        state.texts = data.intermediate.texts || [];
+        state.shapes = data.intermediate.shapes || [];
+        state.images = data.intermediate.images || [];
+
+        state.texts.forEach((t, i) => t._id = 't_' + i);
+        state.shapes.forEach((s, i) => s._id = 's_' + i);
+        state.images.forEach((img, i) => img._id = 'i_' + i);
+
+        // 初回履歴保存
+        historyState = []; historyIndex = -1;
+        saveHistory();
+
+        switchView();
+      } catch (e) {
+        alert('解析エラー: ' + e.message);
+        dropHintText.textContent = 'エラーが発生しました。やり直してください。';
+        dropZone.style.pointerEvents = 'auto';
+      }
+    }
+
+    function switchView() {
+      uploadView.style.display = 'none';
+      editorView.style.display = 'block';
+      headerActions.style.display = 'block';
+      window.addEventListener('resize', fitCanvas);
+      fitCanvas();
+      renderCanvas();
+    }
+
+    function fitCanvas() {
+      const pad = 80;
+      const pw = canvasPane.clientWidth - pad;
+      const ph = canvasPane.clientHeight - pad;
+      scale = Math.min(pw / 940, ph / 580, 1.5);
+
+      const scaler = document.getElementById('canvas-scaler');
+      if (scaler) {
+        scaler.style.width = (940 * scale) + 'px';
+        scaler.style.height = (580 * scale) + 'px';
+      }
+      canvas.style.transform = `scale(${scale})`;
+    }
+
+    function renderCanvas() {
+      canvas.innerHTML = `
+        <div class="canvas-border"></div>
+        <div id="selection-box" style="position:absolute; border:1px dashed var(--accent); background:rgba(124,111,247,0.15); pointer-events:none; display:none; z-index:100;"></div>
+      `;
+
+      state.shapes.forEach(s => {
+        const el = document.createElement('div');
+        el.className = 'ce ce-shape';
+        el.dataset.id = s._id; el.dataset.type = 'shape';
+        el.style.left = (s.x * 10) + 'px';
+        el.style.top = (s.y * 10) + 'px';
+        el.style.width = (s.w * 10) + 'px';
+        el.style.height = (s.h * 10) + 'px';
+        el.style.background = s.fill || '#ccc';
+        if (s.type === 'circle') el.style.borderRadius = '50%';
+        else if (s.type === 'rounded_rect') el.style.borderRadius = '6px';
+        if (state.selectedItems.some(i => i.id === s._id)) el.classList.add('selected');
+        canvas.appendChild(el);
+      });
+
+      state.images.forEach(img => {
+        const el = document.createElement('img');
+        el.className = 'ce ce-image';
+        el.draggable = false;
+        el.dataset.id = img._id; el.dataset.type = 'image';
+        el.src = img.href;
+        el.style.left = (img.x * 10) + 'px';
+        el.style.top = (img.y * 10) + 'px';
+        el.style.width = (img.w * 10) + 'px';
+        el.style.height = (img.h * 10) + 'px';
+        if (state.selectedItems.some(i => i.id === img._id)) el.classList.add('selected');
+        canvas.appendChild(el);
+      });
+
+      state.texts.forEach(t => {
+        const el = document.createElement('div');
+        el.className = 'ce ce-text';
+        el.dataset.id = t._id; el.dataset.type = 'text';
+        el.textContent = t.text;
+        el.style.whiteSpace = 'pre-wrap';
+
+        el.style.left = (t.x * 10) + 'px';
+        el.style.top = (t.y * 10) + 'px';
+        el.style.fontSize = (t.font_size * 10) + 'px';
+        el.style.color = t.color || '#000';
+
+        const ff = t.font_family || (t.font_group === 'mincho' ? 'Noto Serif JP' : 'Noto Sans JP');
+        if (ff === 'Noto Serif JP') el.style.fontFamily = "'Noto Serif JP', serif";
+        else el.style.fontFamily = "'Noto Sans JP', sans-serif";
+
+        el.style.fontWeight = t.font_weight || '400';
+
+        if (t.letter_spacing > 0) el.style.letterSpacing = (t.letter_spacing * 10) + 'px';
+
+        if (state.selectedItems.some(i => i.id === t._id)) el.classList.add('selected');
+        canvas.appendChild(el);
+      });
+    }
+
+    // ── ドラッグ & ドロップ ＆ 範囲選択 ──
+    let isDragging = false;
+    let dragMoved = false;
+    let dragStartX = 0, dragStartY = 0;
+    let dragInitialStates = [];
+
+    let isBoxSelecting = false;
+    let boxStartX = 0, boxStartY = 0;
+
+    canvas.addEventListener('mousedown', e => {
+      const el = e.target.closest('.ce');
+      const isMulti = e.shiftKey || e.ctrlKey || e.metaKey;
+
+      if (!el) {
+        if (!isMulti) selectItem(null, null, false);
+
+        // 範囲選択の開始
+        isBoxSelecting = true;
+        const canvasRect = canvas.getBoundingClientRect();
+        boxStartX = (e.clientX - canvasRect.left) / scale;
+        boxStartY = (e.clientY - canvasRect.top) / scale;
+
+        const selBox = document.getElementById('selection-box');
+        if (selBox) {
+          selBox.style.left = boxStartX + 'px';
+          selBox.style.top = boxStartY + 'px';
+          selBox.style.width = '0px';
+          selBox.style.height = '0px';
+          selBox.style.display = 'block';
+        }
+        return;
+      }
+
+      const id = el.dataset.id;
+      const type = el.dataset.type;
+
+      const isAlreadySelected = state.selectedItems.some(i => i.id === id);
+      if (!isAlreadySelected || isMulti) {
+        if (isAlreadySelected && isMulti) {
+          selectItem(id, type, true, true);
+        } else {
+          selectItem(id, type, isMulti);
+        }
+      }
+
+      if (state.selectedItems.length > 0) {
+        isDragging = true;
+        dragMoved = false;
+        dragStartX = e.clientX;
+        dragStartY = e.clientY;
+
+        dragInitialStates = state.selectedItems.map(item => {
+          let d = null;
+          if (item.type === 'text') d = state.texts.find(x => x._id === item.id);
+          if (item.type === 'shape') d = state.shapes.find(x => x._id === item.id);
+          if (item.type === 'image') d = state.images.find(x => x._id === item.id);
+          return { item: d, el: document.querySelector(`.ce[data-id="${item.id}"]`), startX: d.x, startY: d.y };
+        }).filter(x => x.item);
+      }
+    });
+
+    window.addEventListener('mousemove', e => {
+      if (isBoxSelecting) {
+        const canvasRect = canvas.getBoundingClientRect();
+        let currX = (e.clientX - canvasRect.left) / scale;
+        let currY = (e.clientY - canvasRect.top) / scale;
+
+        currX = Math.max(0, Math.min(940, currX));
+        currY = Math.max(0, Math.min(580, currY));
+
+        const x = Math.min(boxStartX, currX);
+        const y = Math.min(boxStartY, currY);
+        const w = Math.abs(currX - boxStartX);
+        const h = Math.abs(currY - boxStartY);
+
+        const selBox = document.getElementById('selection-box');
+        if (selBox) {
+          selBox.style.left = x + 'px';
+          selBox.style.top = y + 'px';
+          selBox.style.width = w + 'px';
+          selBox.style.height = h + 'px';
+        }
+        return;
+      }
+
+      if (!isDragging || dragInitialStates.length === 0) return;
+      const canvasRect = canvas.getBoundingClientRect();
+
+      const deltaX = (e.clientX - dragStartX) / scale / 10;
+      const deltaY = (e.clientY - dragStartY) / scale / 10;
+
+      if (Math.abs(deltaX) > 0.1 || Math.abs(deltaY) > 0.1) dragMoved = true;
+
+      dragInitialStates.forEach(d => {
+        d.item.x = parseFloat((d.startX + deltaX).toFixed(2));
+        d.item.y = parseFloat((d.startY + deltaY).toFixed(2));
+        if (d.el) {
+          d.el.style.left = (d.item.x * 10) + 'px';
+          d.el.style.top = (d.item.y * 10) + 'px';
+        }
+      });
+
+      if (state.selectedItems.length === 1) {
+        const xInp = document.getElementById('prop-x');
+        const yInp = document.getElementById('prop-y');
+        if (xInp) xInp.value = dragInitialStates[0].item.x;
+        if (yInp) yInp.value = dragInitialStates[0].item.y;
+      }
+    });
+
+    window.addEventListener('mouseup', e => {
+      if (isBoxSelecting) {
+        isBoxSelecting = false;
+        const selBox = document.getElementById('selection-box');
+        if (selBox) {
+          selBox.style.display = 'none';
+          const bx = parseFloat(selBox.style.left);
+          const by = parseFloat(selBox.style.top);
+          const bw = parseFloat(selBox.style.width);
+          const bh = parseFloat(selBox.style.height);
+
+          if (bw > 5 && bh > 5) {
+            const newSel = [];
+            document.querySelectorAll('.ce').forEach(el => {
+              const ex = parseFloat(el.style.left);
+              const ey = parseFloat(el.style.top);
+              const ew = el.offsetWidth;
+              const eh = el.offsetHeight;
+              if (ex < bx + bw && ex + ew > bx && ey < by + bh && ey + eh > by) {
+                newSel.push({ id: el.dataset.id, type: el.dataset.type });
+              }
+            });
+
+            const isMulti = e.shiftKey || e.ctrlKey || e.metaKey;
+            if (isMulti) {
+              newSel.forEach(ns => {
+                if (!state.selectedItems.some(i => i.id === ns.id)) state.selectedItems.push(ns);
+              });
+            } else {
+              state.selectedItems = newSel;
+            }
+
+            document.querySelectorAll('.ce').forEach(el => el.classList.remove('selected'));
+            state.selectedItems.forEach(item => {
+              const el = document.querySelector(`.ce[data-id="${item.id}"]`);
+              if (el) el.classList.add('selected');
+            });
+            renderProperties();
+          }
+        }
+      }
+
+      if (isDragging) {
+        if (dragMoved) saveHistory();
+        isDragging = false;
+        dragInitialStates = [];
+        dragMoved = false;
+      }
+    });
+
+    // ── プロパティペイン ──
+    function selectItem(id, type, isMulti = false, toggleOff = false) {
+      if (!id) {
+        state.selectedItems = [];
+      } else {
+        const existingIdx = state.selectedItems.findIndex(i => i.id === id);
+        if (isMulti) {
+          if (toggleOff && existingIdx >= 0) state.selectedItems.splice(existingIdx, 1);
+          else if (existingIdx === -1) state.selectedItems.push({ id, type });
+        } else {
+          state.selectedItems = [{ id, type }];
+        }
+      }
+
+      document.querySelectorAll('.ce').forEach(el => el.classList.remove('selected'));
+      state.selectedItems.forEach(item => {
+        const el = document.querySelector(`.ce[data-id="${item.id}"]`);
+        if (el) el.classList.add('selected');
+      });
+
+      renderProperties();
+    }
+
+    // ── 整列機能 ──
+    window.alignSelected = function (mode) {
+      if (state.selectedItems.length < 2) return;
+
+      const items = state.selectedItems.map(si => {
+        if (si.type === 'text') return state.texts.find(x => x._id === si.id);
+        if (si.type === 'shape') return state.shapes.find(x => x._id === si.id);
+        if (si.type === 'image') return state.images.find(x => x._id === si.id);
+      }).filter(Boolean);
+
+      let target = 0;
+      if (mode === 'left') {
+        target = Math.min(...items.map(i => i.x));
+        items.forEach(i => i.x = target);
+      } else if (mode === 'top') {
+        target = Math.min(...items.map(i => i.y));
+        items.forEach(i => i.y = target);
+      } else if (mode === 'bottom') {
+        items.forEach(i => {
+          let el = document.querySelector(`.ce[data-id="${i._id}"]`);
+          i.bottomEdge = i.y + (el ? el.offsetHeight / 10 : (i.h || 0));
+        });
+        target = Math.max(...items.map(i => i.bottomEdge));
+        items.forEach(i => {
+          let el = document.querySelector(`.ce[data-id="${i._id}"]`);
+          let h = el ? el.offsetHeight / 10 : (i.h || 0);
+          i.y = parseFloat((target - h).toFixed(2));
+        });
+      } else if (mode === 'right') {
+        items.forEach(i => {
+          let el = document.querySelector(`.ce[data-id="${i._id}"]`);
+          i.rightEdge = i.x + (el ? el.offsetWidth / 10 : (i.w || 0));
+        });
+        target = Math.max(...items.map(i => i.rightEdge));
+        items.forEach(i => {
+          let el = document.querySelector(`.ce[data-id="${i._id}"]`);
+          let w = el ? el.offsetWidth / 10 : (i.w || 0);
+          i.x = parseFloat((target - w).toFixed(2));
+        });
+      } else if (mode === 'center') {
+        let cxSum = 0;
+        items.forEach(i => {
+          let el = document.querySelector(`.ce[data-id="${i._id}"]`);
+          cxSum += i.x + (el ? el.offsetWidth / 20 : (i.w || 0) / 2);
+        });
+        target = cxSum / items.length;
+        items.forEach(i => {
+          let el = document.querySelector(`.ce[data-id="${i._id}"]`);
+          let w = el ? el.offsetWidth / 10 : (i.w || 0);
+          i.x = parseFloat((target - w / 2).toFixed(2));
+        });
+      }
+      renderCanvas();
+      if (state.selectedItems.length === 1) renderProperties();
+
+      saveHistory(); // 整列後に保存
+    };
+
+    function renderProperties() {
+      const paletteColors = ['#000000', '#333333', '#808080', '#CCCCCC', '#FFFFFF', '#E53935', '#F39C12', '#F1C40F', '#2ECC71', '#3498DB', '#2980B9', '#8E44AD'];
+      const buildPalette = (inputId) => {
+        return '<div class="color-palette">' +
+          paletteColors.map(c => `<div class="color-swatch" style="background:${c}" onclick="document.getElementById('${inputId}').value='${c}'; document.getElementById('${inputId}').dispatchEvent(new Event('input')); document.getElementById('${inputId}').dispatchEvent(new Event('change'));"></div>`).join('') +
+          '</div>';
+      };
+
+      if (state.selectedItems.length === 0) {
+        propIdLabel.textContent = '';
+        propsPanel.innerHTML = '<div class="empty-state">キャンバス上の要素をクリックして編集<br><br><small style="color:var(--text-muted)">Shift+クリックで複数選択<br>ドラッグで範囲選択</small></div>';
+        return;
+      }
+
+      if (state.selectedItems.length > 1) {
+        propIdLabel.textContent = `複数選択 (${state.selectedItems.length})`;
+        propsPanel.innerHTML = `
+          <div class="prop-group">
+            <label style="margin-bottom:12px">整列ツール</label>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+              <button class="btn btn-primary" onclick="alignSelected('left')">左揃え ◧</button>
+              <button class="btn btn-primary" onclick="alignSelected('center')">中央揃え ◫</button>
+              <button class="btn btn-primary" onclick="alignSelected('right')">右揃え ◨</button>
+              <button class="btn btn-primary" onclick="alignSelected('top')">上揃え ⬒</button>
+              <button class="btn btn-primary" onclick="alignSelected('bottom')">下揃え ⬓</button>
+            </div>
+          </div>
+          <div class="prop-group" style="margin-top:24px;">
+            <label style="margin-bottom:12px">一括変更アシスト</label>
+            <div class="prop-row prop-group">
+              <div style="flex:1">
+                 <label>フォント（テキストのみ）</label>
+                 <select id="prop-multi-font-family">
+                     <option value="">--維持--</option>
+                     <option value="Noto Sans JP">ゴシック (Noto Sans)</option>
+                     <option value="Noto Serif JP">明朝 (Noto Serif)</option>
+                 </select>
+              </div>
+              <div style="flex:1">
+                 <label>太さ（テキストのみ）</label>
+                 <select id="prop-multi-font-weight">
+                     <option value="">--維持--</option>
+                     <option value="300">Light (300)</option>
+                     <option value="400">Regular (400)</option>
+                     <option value="500">Medium (500)</option>
+                     <option value="700">Bold (700)</option>
+                 </select>
+              </div>
+            </div>
+            <div class="prop-row prop-group">
+              <div style="flex:1"><label>サイズ pt（テキスト）</label><input type="number" step="0.5" id="prop-multi-fs-pt" placeholder="--"></div>
+              <div style="flex:1"><label>文字間 mm（テキスト）</label><input type="number" step="0.5" id="prop-multi-ls" placeholder="--"></div>
+            </div>
+            <div class="prop-group">
+              <label>共通カラー (Hex)</label>
+              <input type="text" id="prop-multi-color" placeholder="--変更しない--">
+              ${buildPalette('prop-multi-color')}
+            </div>
+          </div>
+        `;
+
+        const bindMulti = (id, key, isFloat) => {
+          const el = document.getElementById(id);
+          if (!el) return;
+          el.addEventListener('change', e => {
+            const val = e.target.value;
+            if (val === '') return;
+            let finalVal = val;
+            if (isFloat) finalVal = parseFloat(val) || 0;
+
+            state.selectedItems.filter(i => i.type === 'text').forEach(item => {
+              const textObj = state.texts.find(x => x._id === item.id);
+              if (textObj) textObj[key] = finalVal;
+            });
+            renderCanvas();
+            saveHistory();
+          });
+        };
+
+        bindMulti('prop-multi-font-family', 'font_family', false);
+        bindMulti('prop-multi-font-weight', 'font_weight', false);
+        bindMulti('prop-multi-ls', 'letter_spacing', true);
+
+        const fsInput = document.getElementById('prop-multi-fs-pt');
+        if (fsInput) {
+          fsInput.addEventListener('change', e => {
+            const pt = parseFloat(e.target.value);
+            if (isNaN(pt)) return;
+            state.selectedItems.filter(i => i.type === 'text').forEach(item => {
+              const textObj = state.texts.find(x => x._id === item.id);
+              if (textObj) {
+                textObj.font_size_pt = pt;
+                textObj.font_size = pt * 0.352778;
+              }
+            });
+            renderCanvas();
+            saveHistory();
+          });
+        }
+
+        const colorInput = document.getElementById('prop-multi-color');
+        if (colorInput) {
+          colorInput.addEventListener('change', e => {
+            const c = e.target.value.trim();
+            if (!c) return;
+            state.selectedItems.forEach(item => {
+              let obj = null;
+              if (item.type === 'text') obj = state.texts.find(x => x._id === item.id);
+              if (item.type === 'shape') obj = state.shapes.find(x => x._id === item.id);
+              if (obj) {
+                if (item.type === 'shape') obj.fill = c;
+                else obj.color = c;
+              }
+            });
+            renderCanvas();
+            saveHistory();
+          });
+        }
+        return;
+      }
+
+      const item = state.selectedItems[0];
+      const id = item.id;
+      const type = item.type;
+
+      propIdLabel.textContent = type.toUpperCase();
+      let d = null;
+      if (type === 'text') d = state.texts.find(x => x._id === id);
+      if (type === 'shape') d = state.shapes.find(x => x._id === id);
+      if (type === 'image') d = state.images.find(x => x._id === id);
+      if (!d) return;
+
+      let html = '';
+
+      html += `
+        <div class="prop-row prop-group">
+          <div style="flex:1"><label>X (mm)</label><input type="number" step="0.5" id="prop-x" value="${d.x}"></div>
+          <div style="flex:1"><label>Y (mm)</label><input type="number" step="0.5" id="prop-y" value="${d.y}"></div>
+        </div>
+      `;
+
+      if (type === 'text') {
+        html += `
+          <div class="prop-group">
+            <label>テキスト内容</label>
+            <textarea id="prop-text">${d.text}</textarea>
+          </div>
+          <div class="prop-row prop-group">
+            <div style="flex:1">
+               <label>フォント</label>
+               <select id="prop-font-family">
+                   <option value="Noto Sans JP" ${d.font_family === 'Noto Sans JP' ? 'selected' : ''}>ゴシック (Noto Sans)</option>
+                   <option value="Noto Serif JP" ${d.font_family === 'Noto Serif JP' ? 'selected' : ''}>明朝 (Noto Serif)</option>
+               </select>
+            </div>
+            <div style="flex:1">
+               <label>太さ(Weight)</label>
+               <select id="prop-font-weight">
+                   <option value="300" ${String(d.font_weight) === '300' ? 'selected' : ''}>Light (300)</option>
+                   <option value="400" ${String(d.font_weight) === '400' ? 'selected' : ''}>Regular (400)</option>
+                   <option value="500" ${String(d.font_weight) === '500' ? 'selected' : ''}>Medium (500)</option>
+                   <option value="700" ${String(d.font_weight) === '700' ? 'selected' : ''}>Bold (700)</option>
+               </select>
+            </div>
+          </div>
+          <div class="prop-row prop-group">
+            <div style="flex:1"><label>サイズ(pt)</label><input type="number" step="0.5" id="prop-fs-pt" value="${d.font_size_pt ? d.font_size_pt.toFixed(1) : (d.font_size / 0.352778).toFixed(1)}"></div>
+            <div style="flex:1"><label>文字間(mm)</label><input type="number" step="0.5" id="prop-ls" value="${d.letter_spacing || 0}"></div>
+          </div>
+          <div class="prop-group">
+            <label>文字色Hex (RGB)</label>
+            <input type="text" id="prop-color" value="${d.color || '#000000'}">
+            ${buildPalette('prop-color')}
+          </div>
+        `;
+      } else if (type === 'image' || type === 'shape') {
+        html += `
+          <div class="prop-row prop-group">
+            <div style="flex:1"><label>幅 (mm)</label><input type="number" step="1" id="prop-w" value="${d.w}"></div>
+            <div style="flex:1"><label>高さ (mm)</label><input type="number" step="1" id="prop-h" value="${d.h}"></div>
+          </div>
+        `;
+        if (type === 'shape') {
+          html += `<div class="prop-group"><label>塗り色 (Hex)</label><input type="text" id="prop-color" value="${d.fill || '#CCCCCC'}">${buildPalette('prop-color')}</div>`;
+        }
+      }
+
+      propsPanel.innerHTML = html;
+
+      const bind = (id, key, isFloat, isStr) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('input', e => {
+          let val = e.target.value;
+          if (!isStr) val = isFloat ? parseFloat(val) || 0 : parseInt(val) || 0;
+          d[key] = val;
+          renderCanvas();
+        });
+        el.addEventListener('change', () => saveHistory()); // 変更確定で履歴保存
+      };
+
+      bind('prop-x', 'x', true);
+      bind('prop-y', 'y', true);
+      bind('prop-w', 'w', true);
+      bind('prop-h', 'h', true);
+      bind('prop-text', 'text', false, true);
+      bind('prop-font-family', 'font_family', false, true);
+      bind('prop-font-weight', 'font_weight', false, true);
+
+      const fsPtEl = document.getElementById('prop-fs-pt');
+      if (fsPtEl) {
+        fsPtEl.addEventListener('input', e => {
+          let pt = parseFloat(e.target.value) || 0;
+          d.font_size_pt = pt;
+          d.font_size = pt * 0.352778;
+          renderCanvas();
+        });
+        fsPtEl.addEventListener('change', () => saveHistory());
+      }
+
+      bind('prop-ls', 'letter_spacing', true);
+      bind('prop-color', type === 'shape' ? 'fill' : 'color', false, true);
+    }
+
+    // ── ロゴ追加 ──
+    addLogoBtn.addEventListener('click', () => logoInput.click());
+    logoInput.addEventListener('change', e => {
+      const f = e.target.files[0];
+      if (!f) return;
+      const reader = new FileReader();
+      reader.onload = ev => {
+        const dataUrl = ev.target.result;
+        const img = new Image();
+        img.onload = () => {
+          const ratio = img.height / img.width;
+          const w_mm = 30;
+          const h_mm = 30 * ratio;
+          const newId = 'i_' + Date.now();
+          state.images.push({
+            _id: newId, role: 'image', type: 'image',
+            href: dataUrl,
+            x: 10, y: 10, w: w_mm, h: h_mm
+          });
+          logoInput.value = '';
+          renderCanvas();
+          selectItem(newId, 'image');
+          saveHistory();
+        };
+        img.src = dataUrl;
+      };
+      reader.readAsDataURL(f);
+    });
+
+    // ── SVG生成＆ダウンロード ──
+    dlSvgBtn.addEventListener('click', async () => {
+      dlSvgBtn.disabled = true;
+      const prevHtml = dlSvgBtn.innerHTML;
+      dlSvgBtn.innerHTML = '<span class="loader"></span>生成中...';
+
+      const cleanData = {
+        card_size_mm: { w: 94, h: 58 },
+        texts: state.texts.map(({ _id, ...rest }) => rest),
+        shapes: state.shapes.map(({ _id, ...rest }) => rest),
+        images: state.images.map(({ _id, ...rest }) => rest)
+      };
+
+      try {
+        const res = await fetch('/api/build_svg', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(cleanData)
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+
+        const svgContent = data.svg;
+
+        const fileName = 'business_card_edited.svg';
+        if ('showSaveFilePicker' in window) {
+          try {
+            const handle = await window.showSaveFilePicker({
+              suggestedName: fileName,
+              types: [{ description: 'SVG ファイル', accept: { 'image/svg+xml': ['.svg'] } }],
+            });
+            const writable = await handle.createWritable();
+            await writable.write(svgContent);
+            await writable.close();
+            alert('保存が完了しました。');
+          } catch (err) { }
+        } else {
+          const blob = new Blob([svgContent], { type: 'image/svg+xml' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.style.display = 'none';
+          a.href = url;
+          a.download = fileName;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        }
+      } catch (e) {
+        alert('SVG生成エラー: ' + e.message);
+      } finally {
+        dlSvgBtn.disabled = false;
+        dlSvgBtn.innerHTML = prevHtml;
+      }
+    });
+  </script>
+</body>
+
+</html>

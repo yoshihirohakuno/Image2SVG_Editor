@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+Scripts/
+Lib/
+Include/
+.env
+
+# Flask
+instance/
+.webassets-cache
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project-specific
+*.svg
+*.json
+!tests/*.json
