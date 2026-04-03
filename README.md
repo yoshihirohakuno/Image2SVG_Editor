@@ -42,6 +42,7 @@ gunicorn --bind 0.0.0.0:$PORT web.server:app
 
 - `GitHub Pages` は静的 HTML/CSS/JS 配信向けなので、このアプリの `/api/convert` は動きません
 - `GitHub Codespaces` なら GitHub 上の開発環境として起動はできますが、常設公開サーバーには向きません
+- Render では Python のデフォルト版が変わることがあるため、このリポジトリは `.python-version` で `3.11.11` に固定しています
 - PDF 入力も使えるように `PyMuPDF` を依存関係へ追加しています
 
 ---
