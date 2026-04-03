@@ -19,6 +19,31 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+## GitHub で動かす場合
+
+このリポジトリは `Flask + OCR + OpenCV` を使うため、`GitHub Pages` では動きません。  
+GitHub リポジトリをそのまま接続して公開するなら、`Render` などの Python 対応ホスティングを使うのが現実的です。
+
+このリポジトリには `render.yaml` を入れてあるので、以下で公開できます。
+
+1. GitHub に push する
+2. Render で `New +` → `Blueprint` を選ぶ
+3. この GitHub リポジトリを接続する
+4. `image2svg-editor` サービスを作成する
+5. デプロイ完了後、発行された URL にアクセスする
+
+起動コマンドは Render 側で自動的に以下が使われます。
+
+```bash
+gunicorn --bind 0.0.0.0:$PORT web.server:app
+```
+
+補足:
+
+- `GitHub Pages` は静的 HTML/CSS/JS 配信向けなので、このアプリの `/api/convert` は動きません
+- `GitHub Codespaces` なら GitHub 上の開発環境として起動はできますが、常設公開サーバーには向きません
+- PDF 入力も使えるように `PyMuPDF` を依存関係へ追加しています
+
 ---
 
 ## 使い方
@@ -47,6 +72,8 @@ python web/server.py
 ```
 
 ブラウザで画像をドラッグ&ドロップ → SVGプレビュー → ダウンロード
+
+本番公開時は `python web/server.py` ではなく `gunicorn` 起動を使ってください。
 
 ---
 

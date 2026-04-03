@@ -1,6 +1,8 @@
 easyocr>=1.7.0
-opencv-python>=4.8.0
+opencv-python-headless>=4.8.0
 svgwrite>=1.4.3
 flask>=3.0.0
+gunicorn>=23.0.0
 Pillow>=10.0.0
 numpy>=1.24.0
+PyMuPDF>=1.24.0
