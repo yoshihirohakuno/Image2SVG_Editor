@@ -176,20 +176,33 @@ def _add_text(group, dwg: Drawing, t: dict) -> None:
         transform_val = f"translate({x},{baseline_y}) skewX(-15) translate({-x},{-baseline_y})"
         extra["transform"] = transform_val
 
-    # アウトライン (stroke): Illustratorがstyleタグ内の不正な構文やdevice-cmykでエラーを起こすため、
-    # 確実に見えるようXML属性の純粋なHEX値で出力する
+    # アウトライン (stroke): Illustratorがstyleタグ内の不正な構文でエラーを起こすのを防ぐため属性で指定
     stroke_color = t.get("stroke_color")
     stroke_width = t.get("stroke_width", 0)
     if stroke_color and stroke_width > 0:
         extra["stroke"] = stroke_color
         extra["stroke_width"] = stroke_width
 
+    # Illustratorは <text> ではなく中の <tspan> に直接色塗りを指定しないと
+    # 黒色(継承バグ)になってしまうことがあるため、スタイル系属性は tspan にも直接渡す準備をする
+    tspan_style = {
+        "fill": color,
+        "font_family": ff_str,
+        "font_size": font_size,
+        "font_weight": font_weight,
+    }
+    if "letter_spacing" in extra:
+        tspan_style["letter_spacing"] = extra["letter_spacing"]
+    if stroke_color and stroke_width > 0:
+        tspan_style["stroke"] = stroke_color
+        tspan_style["stroke_width"] = stroke_width
+
     text_elem = dwg.text(
         "",
         insert=(x, baseline_y),
         fill=color,
         font_family=ff_str,
-        font_size=font_size,          # 単位なし = viewBox ユーザー座標 (= mm)
+        font_size=font_size,
         font_weight=font_weight,
         id=f"{role}_{_add_text._count}",
         **extra,
@@ -198,9 +211,9 @@ def _add_text(group, dwg: Drawing, t: dict) -> None:
     lines = text_str.split("\n")
     for i, line in enumerate(lines):
         if i == 0:
-            t_span = dwg.tspan(line, x=[x])
+            t_span = dwg.tspan(line, x=[x], **tspan_style)
         else:
-            t_span = dwg.tspan(line, x=[x], dy=["1.2em"])
+            t_span = dwg.tspan(line, x=[x], dy=["1.2em"], **tspan_style)
         text_elem.add(t_span)
 
     group.add(text_elem)
