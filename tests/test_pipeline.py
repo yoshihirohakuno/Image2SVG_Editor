@@ -5,6 +5,7 @@
 
 import sys
 import os
+from unittest.mock import patch
 
 # プロジェクトルートをパスに追加
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -109,6 +110,31 @@ def test_svg_generation():
     return out_path
 
 
+def test_svg_text_fallback_preserves_fill_and_stroke():
+    print("=== テスト: テキストフォールバック時の fill/stroke 保持 ===")
+    texts = [{
+        "text": "Ag",
+        "x": 5,
+        "y": 10,
+        "font_size": 6,
+        "color": "#ffffff",
+        "stroke_color": "#7c6ff7",
+        "stroke_width": 1.5,
+        "font_family": "Noto Sans JP",
+        "font_weight": "700",
+    }]
+    out_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "sample_fallback_output.svg")
+    with patch("src.text_outliner.outline_text_block", return_value=None):
+        svg = build_svg_from_scratch(texts=texts, output_path=out_path)
+
+    text_section = svg.split('<g clip-path="url(#card-clip)" id="texts">', 1)[1].split("</g>", 1)[0]
+    assert 'fill="#ffffff"' in svg, "フォールバックSVGに fill 属性が出力されていない"
+    assert 'stroke="#7c6ff7"' in svg, "フォールバックSVGに stroke 属性が出力されていない"
+    assert 'paint-order="stroke fill"' in svg, "フォールバックSVGに paint-order が出力されていない"
+    assert "device-cmyk" not in text_section, "テキスト出力に device-cmyk が残っている"
+    print("  → ✅ fill/stroke 保持テスト通過\n")
+
+
 if __name__ == "__main__":
     print("🧪 ユニットテスト実行\n" + "=" * 50 + "\n")
     test_classifier()
@@ -116,6 +142,7 @@ if __name__ == "__main__":
     test_shape_classify()
     test_scale_to_mm()
     out = test_svg_generation()
+    test_svg_text_fallback_preserves_fill_and_stroke()
     print("=" * 50)
     print(f"🎉 全テスト完了！")
     print(f"   サンプルSVG: {out}")

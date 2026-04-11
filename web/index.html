@@ -246,13 +246,26 @@
       outline-offset: 2px;
     }
 
-    .ce:hover::after {
-      content: '';
+    /* リサイズハンドル */
+    .resize-handle {
       position: absolute;
-      inset: -2px;
-      border: 1px dashed rgba(124, 111, 247, 0.5);
-      pointer-events: none;
+      width: 8px;
+      height: 8px;
+      background: white;
+      border: 2px solid var(--accent);
+      border-radius: 2px;
+      cursor: nwse-resize;
+      z-index: 200;
+      pointer-events: all;
     }
+    .resize-handle[data-dir="n"]  { top:-5px; left:50%; transform:translateX(-50%); cursor:ns-resize; }
+    .resize-handle[data-dir="s"]  { bottom:-5px; left:50%; transform:translateX(-50%); cursor:ns-resize; }
+    .resize-handle[data-dir="e"]  { right:-5px; top:50%; transform:translateY(-50%); cursor:ew-resize; }
+    .resize-handle[data-dir="w"]  { left:-5px; top:50%; transform:translateY(-50%); cursor:ew-resize; }
+    .resize-handle[data-dir="nw"] { top:-5px; left:-5px; cursor:nwse-resize; }
+    .resize-handle[data-dir="ne"] { top:-5px; right:-5px; cursor:nesw-resize; }
+    .resize-handle[data-dir="sw"] { bottom:-5px; left:-5px; cursor:nesw-resize; }
+    .resize-handle[data-dir="se"] { bottom:-5px; right:-5px; cursor:nwse-resize; }
 
     .color-palette {
       display: grid;
@@ -778,61 +791,193 @@
       });
 
       state.images.forEach(img => {
+        // imgはvoid要素なのでdivラッパーに包む（リサイズハンドルを子に追加するため）
+        const wrapper = document.createElement('div');
+        wrapper.className = 'ce ce-image-wrapper';
+        wrapper.dataset.id = img._id; wrapper.dataset.type = 'image';
+        wrapper.style.position = 'absolute';
+        wrapper.style.left = (img.x * 10) + 'px';
+        wrapper.style.top = (img.y * 10) + 'px';
+        wrapper.style.width = (img.w * 10) + 'px';
+        wrapper.style.height = (img.h * 10) + 'px';
+        if (state.selectedItems.some(i => i.id === img._id)) wrapper.classList.add('selected');
+
         const el = document.createElement('img');
-        el.className = 'ce ce-image';
+        el.className = 'ce-image';
         el.draggable = false;
-        el.dataset.id = img._id; el.dataset.type = 'image';
         el.src = img.href;
-        el.style.left = (img.x * 10) + 'px';
-        el.style.top = (img.y * 10) + 'px';
-        el.style.width = (img.w * 10) + 'px';
-        el.style.height = (img.h * 10) + 'px';
-        if (state.selectedItems.some(i => i.id === img._id)) el.classList.add('selected');
-        canvas.appendChild(el);
+        el.style.width = '100%';
+        el.style.height = '100%';
+        el.style.objectFit = 'contain';
+        el.style.display = 'block';
+        el.style.pointerEvents = 'none'; // クリックはwrapperで受ける
+        wrapper.appendChild(el);
+        canvas.appendChild(wrapper);
       });
+
+      // ── SVGレイヤー（テキスト専用）──
+      const svgNS = 'http://www.w3.org/2000/svg';
+      const svgLayer = document.createElementNS(svgNS, 'svg');
+      svgLayer.setAttribute('xmlns', svgNS);
+      svgLayer.setAttribute('viewBox', '0 0 940 580');
+      svgLayer.style.cssText = 'position:absolute;inset:0;width:940px;height:580px;overflow:visible;pointer-events:none;z-index:5;';
+
+      // フィルター定義用defsを先に追加
+      const svgDefs = document.createElementNS(svgNS, 'defs');
+      svgLayer.appendChild(svgDefs);
+
+      // ── テキスト要素ヘルパー ──
+      const mkText = (svgNS, line, x, y, fs, fw, ffStr, ls, attrs = {}) => {
+        const te = document.createElementNS(svgNS, 'text');
+        te.setAttribute('x', x); te.setAttribute('y', y);
+        te.setAttribute('font-family', ffStr); te.setAttribute('font-size', fs);
+        te.setAttribute('font-weight', fw);
+        if (ls > 0) te.setAttribute('letter-spacing', ls);
+        Object.entries(attrs).forEach(([k,v]) => te.setAttribute(k, v));
+        te.textContent = line || '';
+        return te;
+      };
 
       state.texts.forEach(t => {
-        const el = document.createElement('div');
-        el.className = 'ce ce-text';
-        el.dataset.id = t._id; el.dataset.type = 'text';
-        el.textContent = t.text;
-        el.style.whiteSpace = 'pre-wrap';
-
-        el.style.left = (t.x * 10) + 'px';
-        el.style.top = (t.y * 10) + 'px';
-        el.style.fontSize = (t.font_size * 10) + 'px';
-        el.style.color = t.color || '#000';
-
         const ff = t.font_family || (t.font_group === 'mincho' ? 'Noto Serif JP' : 'Noto Sans JP');
-        if (ff === 'Noto Serif JP') el.style.fontFamily = "'Noto Serif JP', serif";
-        else if (ff === 'Noto Sans JP') el.style.fontFamily = "'Noto Sans JP', sans-serif";
-        else el.style.fontFamily = `"${ff}", sans-serif`;
+        const ffStr = ff === 'Noto Serif JP' ? "'Noto Serif JP', serif"
+                    : ff === 'Noto Sans JP'  ? "'Noto Sans JP', sans-serif"
+                    : `'${ff}', sans-serif`;
+        const fs = (t.font_size || 3) * 10;
+        const fw = t.font_weight || '400';
+        const mainCol = t.color || '#000000';
+        const strkCol = t.stroke_color || '#7c6ff7';
+        const strkW   = t.stroke_width ? t.stroke_width * 0.352778 * 10 : 0;
+        const ls      = t.letter_spacing > 0 ? t.letter_spacing * 10 : 0;
+        const effect  = t.text_effect || 'normal';
+        const isSelected = state.selectedItems.some(i => i.id === t._id);
 
-        el.style.fontWeight = t.font_weight || '400';
+        const g = document.createElementNS(svgNS, 'g');
+        g.dataset.id = t._id; g.dataset.type = 'text';
+        g.style.cursor = 'grab'; g.style.pointerEvents = 'all';
+        g.classList.add('ce');
+        if (isSelected) g.classList.add('selected');
 
-        if (t.letter_spacing > 0) el.style.letterSpacing = (t.letter_spacing * 10) + 'px';
+        const lines  = (t.text || '').split('\n');
+        const baseX  = t.x * 10;
+        const baseY  = t.y * 10 + fs * 0.85;
+        g.dataset.x = baseX; g.dataset.y = t.y * 10;
+        g.dataset.w = '200'; g.dataset.h = String(fs * lines.length * 1.2);
 
-        // テキスト装飾
-        if (t.font_style === 'italic') el.style.fontStyle = 'italic';
-        const decorations = [];
-        if (t.text_underline) decorations.push('underline');
-        if (t.text_linethrough) decorations.push('line-through');
-        if (decorations.length) el.style.textDecoration = decorations.join(' ');
+        const mk = (line, x, y, attrs) => mkText(svgNS, line, x, y, fs, fw, ffStr, ls, attrs);
 
-        // テキストアウトライン（stroke） - WebKitのtext-strokeを使用
-        if (t.stroke_color && t.stroke_width > 0) {
-          el.style.webkitTextStroke = `${t.stroke_width * 10}px ${t.stroke_color}`;
-          el.style.paintOrder = 'stroke fill';
-        } else {
-          el.style.webkitTextStroke = '';
+        switch (effect) {
+
+          case 'fukuro': { // 袋文字: 厚いStroke後ろに塗り
+            const sw = strkW > 0 ? strkW : fs * 0.15;
+            lines.forEach((ln, i) => g.appendChild(mk(ln, baseX, baseY + i*fs*1.2, {
+              fill: mainCol, stroke: strkCol, 'stroke-width': sw*2,
+              'paint-order': 'stroke fill', 'stroke-linejoin': 'round'
+            })));
+            break;
+          }
+
+          case 'background': { // 背景: 塗りつぶし背景 + テキスト
+            const pad = fs * 0.15;
+            const rect = document.createElementNS(svgNS, 'rect');
+            rect.setAttribute('x', baseX - pad);
+            rect.setAttribute('y', baseY - fs * 0.85 - pad);
+            rect.setAttribute('width', 220); rect.setAttribute('height', fs * lines.length * 1.2 + pad * 2);
+            rect.setAttribute('fill', strkCol); rect.setAttribute('rx', '5');
+            g.appendChild(rect);
+            lines.forEach((ln, i) => g.appendChild(mk(ln, baseX, baseY + i*fs*1.2, { fill: mainCol })));
+            break;
+          }
+
+          case 'splice': { // スプライス: オフセット二重文字
+            const off = fs * 0.08;
+            lines.forEach((ln, i) => g.appendChild(mk(ln, baseX+off, baseY+i*fs*1.2+off*0.5, {
+              fill: 'none', stroke: strkCol, 'stroke-width': strkW > 0 ? strkW : fs*0.05,
+              'stroke-linejoin': 'round'
+            })));
+            lines.forEach((ln, i) => g.appendChild(mk(ln, baseX, baseY + i*fs*1.2, {
+              fill: mainCol, stroke: strkCol, 'stroke-width': strkW > 0 ? strkW*0.5 : fs*0.02,
+              'stroke-linejoin': 'round', 'paint-order': 'stroke fill'
+            })));
+            break;
+          }
+
+          case 'nuki': { // 中抜き: Strokeのみ、塗りなし
+            const sw = strkW > 0 ? strkW : fs * 0.06;
+            lines.forEach((ln, i) => g.appendChild(mk(ln, baseX, baseY + i*fs*1.2, {
+              fill: 'none', stroke: strkCol, 'stroke-width': sw, 'stroke-linejoin': 'round'
+            })));
+            break;
+          }
+
+          case 'neon': { // ネオン: SVGフィルターによるグロー
+            const fid = 'neon-' + t._id;
+            const filter = document.createElementNS(svgNS, 'filter');
+            filter.setAttribute('id', fid);
+            filter.setAttribute('x', '-60%'); filter.setAttribute('y', '-60%');
+            filter.setAttribute('width', '220%'); filter.setAttribute('height', '220%');
+            const blur1 = document.createElementNS(svgNS, 'feGaussianBlur');
+            blur1.setAttribute('stdDeviation', '3'); blur1.setAttribute('result', 'blur1');
+            const blur2 = document.createElementNS(svgNS, 'feGaussianBlur');
+            blur2.setAttribute('in', 'SourceGraphic'); blur2.setAttribute('stdDeviation', '8'); blur2.setAttribute('result', 'blur2');
+            const merge = document.createElementNS(svgNS, 'feMerge');
+            ['blur2','blur2','blur1','SourceGraphic'].forEach(v => {
+              const n = document.createElementNS(svgNS, 'feMergeNode'); n.setAttribute('in', v); merge.appendChild(n);
+            });
+            filter.appendChild(blur1); filter.appendChild(blur2); filter.appendChild(merge);
+            svgDefs.appendChild(filter);
+            lines.forEach((ln, i) => g.appendChild(mk(ln, baseX, baseY + i*fs*1.2, {
+              fill: mainCol, stroke: strkCol, 'stroke-width': '0.5', filter: `url(#${fid})`
+            })));
+            break;
+          }
+
+          case 'glitch': { // グリッチ: RGB色ズレ
+            const off = fs * 0.06;
+            lines.forEach((ln, i) => g.appendChild(mk(ln, baseX-off, baseY+i*fs*1.2, { fill:'#00ffff', opacity:'0.85' })));
+            lines.forEach((ln, i) => g.appendChild(mk(ln, baseX+off, baseY+i*fs*1.2, { fill:'#ff00aa', opacity:'0.85' })));
+            lines.forEach((ln, i) => g.appendChild(mk(ln, baseX,    baseY+i*fs*1.2, { fill: mainCol })));
+            break;
+          }
+
+          default: { // normal
+            lines.forEach((ln, i) => {
+              const attrs = { fill: mainCol };
+              if (strkW > 0) {
+                attrs.stroke = strkCol; attrs['stroke-width'] = strkW;
+                attrs['paint-order'] = 'stroke fill'; attrs['stroke-linejoin'] = 'round';
+              }
+              g.appendChild(mk(ln, baseX, baseY + i*fs*1.2, attrs));
+            });
+          }
         }
 
-        if (state.selectedItems.some(i => i.id === t._id)) el.classList.add('selected');
-        canvas.appendChild(el);
+        svgLayer.appendChild(g);
       });
 
-      updateResizeBox();
+
+      canvas.appendChild(svgLayer);
+
+      // ── リサイズハンドル（shape/imageのみ、単一選択時）──
+      if (state.selectedItems.length === 1) {
+        const si = state.selectedItems[0];
+        if (si.type === 'shape' || si.type === 'image') {
+          const el = document.querySelector(`.ce[data-id="${si.id}"]`);
+          if (el) {
+            ['nw','n','ne','e','se','s','sw','w'].forEach(dir => {
+              const h = document.createElement('div');
+              h.className = 'resize-handle';
+              h.dataset.dir = dir;
+              h.dataset.targetId = si.id;
+              h.dataset.targetType = si.type;
+              el.appendChild(h);
+            });
+          }
+        }
+      }
     }
+
+
 
     // ── ドラッグ & ドロップ ＆ 範囲選択 ──
     let isDragging = false;
@@ -927,7 +1072,8 @@
           if (item.type === 'text') d = state.texts.find(x => x._id === item.id);
           if (item.type === 'shape') d = state.shapes.find(x => x._id === item.id);
           if (item.type === 'image') d = state.images.find(x => x._id === item.id);
-          return { item: d, el: document.querySelector(`.ce[data-id="${item.id}"]`), startX: d.x, startY: d.y };
+          const el = document.querySelector(`.ce[data-id="${item.id}"]`);
+          return { item: d, el, type: item.type, startX: d.x, startY: d.y };
         }).filter(x => x.item);
 
         snapLinesX = [];
@@ -1085,8 +1231,15 @@
         d.item.x = parseFloat((d.startX + deltaX).toFixed(2));
         d.item.y = parseFloat((d.startY + deltaY).toFixed(2));
         if (d.el) {
-          d.el.style.left = (d.item.x * 10) + 'px';
-          d.el.style.top = (d.item.y * 10) + 'px';
+          if (d.type === 'text') {
+            // SVG g要素はtransformで移動プレビュー
+            const dx = (d.item.x - d.startX) * 10;
+            const dy = (d.item.y - d.startY) * 10;
+            d.el.setAttribute('transform', `translate(${dx},${dy})`);
+          } else {
+            d.el.style.left = (d.item.x * 10) + 'px';
+            d.el.style.top = (d.item.y * 10) + 'px';
+          }
         }
       });
 
@@ -1123,16 +1276,26 @@
           const bh = parseFloat(selBox.style.height);
 
           if (bw > 5 && bh > 5) {
-            const newSel = [];
+            let newSel = [];
             document.querySelectorAll('.ce').forEach(el => {
-              const ex = parseFloat(el.style.left);
-              const ey = parseFloat(el.style.top);
-              const ew = el.offsetWidth;
-              const eh = el.offsetHeight;
-              if (ex < bx + bw && ex + ew > bx && ey < by + bh && ey + eh > by) {
+              let ex, ey, ew, eh;
+              // SVG g要素はdata属性から座標取得
+              if (el.tagName === 'g' || el.closest('svg')) {
+                ex = parseFloat(el.dataset.x) || 0;
+                ey = parseFloat(el.dataset.y) || 0;
+                ew = parseFloat(el.dataset.w) || 0;
+                eh = parseFloat(el.dataset.h) || 0;
+              } else {
+                ex = parseFloat(el.style.left);
+                ey = parseFloat(el.style.top);
+                ew = el.offsetWidth;
+                eh = el.offsetHeight;
+              }
+              if (!isNaN(ex) && ex < bx + bw && ex + ew > bx && ey < by + bh && ey + eh > by) {
                 newSel.push({ id: el.dataset.id, type: el.dataset.type });
               }
             });
+            newSel = newSel.filter(x => x.id && x.type);
 
             const isMulti = e.shiftKey || e.ctrlKey || e.metaKey;
             if (isMulti) {
@@ -1143,18 +1306,17 @@
               state.selectedItems = newSel;
             }
 
-            document.querySelectorAll('.ce').forEach(el => el.classList.remove('selected'));
-            state.selectedItems.forEach(item => {
-              const el = document.querySelector(`.ce[data-id="${item.id}"]`);
-              if (el) el.classList.add('selected');
-            });
+            renderCanvas(); // リサイズハンドル反映のため全再描画
             renderProperties();
           }
         }
       }
 
       if (isDragging) {
-        if (dragMoved) saveHistory();
+        if (dragMoved) {
+          renderCanvas(); // SVGテキストの正確な位置に確定
+          saveHistory();
+        }
         isDragging = false;
         dragInitialStates = [];
         dragMoved = false;
@@ -1193,19 +1355,27 @@
         }
       }
 
-      document.querySelectorAll('.ce').forEach(el => el.classList.remove('selected'));
-      state.selectedItems.forEach(item => {
-        const el = document.querySelector(`.ce[data-id="${item.id}"]`);
-        if (el) el.classList.add('selected');
-      });
-
-      updateResizeBox();
+      renderCanvas(); // リサイズハンドルを即時描画するために必要
       renderProperties();
     }
+
+    // ── テキストエフェクト設定 ──
+    window.setTextEffect = function(effectName) {
+      if (state.selectedItems.length !== 1) return;
+      const si = state.selectedItems[0];
+      if (si.type !== 'text') return;
+      const d = state.texts.find(x => x._id === si.id);
+      if (!d) return;
+      d.text_effect = effectName;
+      renderCanvas();
+      renderProperties();
+      saveHistory();
+    };
 
     // ── 整列機能 ──
     window.alignSelected = function (mode) {
       if (state.selectedItems.length < 2) return;
+
 
       const items = state.selectedItems.map(si => {
         if (si.type === 'text') return state.texts.find(x => x._id === si.id);
@@ -1337,10 +1507,17 @@
               <div style="flex:1"><label>サイズ pt（テキスト）</label><input type="number" step="0.5" id="prop-multi-fs-pt" placeholder="--"></div>
               <div style="flex:1"><label>文字間 mm（テキスト）</label><input type="number" step="0.5" id="prop-multi-ls" placeholder="--"></div>
             </div>
-            <div class="prop-group">
-              <label>共通カラー (Hex)</label>
-              <input type="text" id="prop-multi-color" placeholder="--変更しない--">
-              ${buildPalette('prop-multi-color')}
+            <div class="prop-row prop-group" style="align-items:flex-start;">
+              <div style="flex:1">
+                 <label>塗りの色 (Fill)</label>
+                 <input type="text" id="prop-multi-color" placeholder="--変更しない--">
+                 ${buildPalette('prop-multi-color')}
+              </div>
+              <div style="flex:1">
+                 <label>線の色・太さ (Stroke)</label>
+                 <input type="text" id="prop-multi-stroke-color" placeholder="色(Hex)">
+                 <div style="margin-top:4px"><input type="number" step="0.5" id="prop-multi-stroke-width" placeholder="太さ(pt)"></div>
+              </div>
             </div>
           </div>
         `;
@@ -1381,6 +1558,8 @@
         }
 
         bindMulti('prop-multi-ls', 'letter_spacing', true);
+        bindMulti('prop-multi-stroke-color', 'stroke_color', false);
+        bindMulti('prop-multi-stroke-width', 'stroke_width', true);
 
         const fsInput = document.getElementById('prop-multi-fs-pt');
         if (fsInput) {
@@ -1450,6 +1629,57 @@
       `;
 
       if (type === 'text') {
+        const EI = {
+          normal: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 50">
+  <rect width="80" height="50" fill="#f8f7ff"/>
+  <text x="40" y="37" text-anchor="middle" font-family="Georgia,serif" font-size="34" font-weight="700" fill="#333">Ag</text>
+</svg>`,
+          fukuro: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 50">
+  <rect width="80" height="50" fill="#f8f7ff"/>
+  <text x="40" y="37" text-anchor="middle" font-family="Georgia,serif" font-size="34" font-weight="700" fill="white" stroke="#7c6ff7" stroke-width="5" stroke-linejoin="round" paint-order="stroke fill">Ag</text>
+</svg>`,
+          background: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 50">
+  <rect width="80" height="50" fill="#f8f7ff"/>
+  <rect x="4" y="6" width="72" height="38" fill="#c4b5fd" rx="6"/>
+  <text x="40" y="35" text-anchor="middle" font-family="Georgia,serif" font-size="28" font-weight="700" fill="#3b0764">Ag</text>
+</svg>`,
+          splice: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 50">
+  <rect width="80" height="50" fill="#f8f7ff"/>
+  <text x="44" y="40" text-anchor="middle" font-family="Georgia,serif" font-size="34" font-weight="700" fill="none" stroke="#bbaaff" stroke-width="2.5" stroke-linejoin="round">Ag</text>
+  <text x="40" y="37" text-anchor="middle" font-family="Georgia,serif" font-size="34" font-weight="700" fill="#7c6ff7" stroke="#6655cc" stroke-width="0.8" paint-order="stroke fill">Ag</text>
+</svg>`,
+          nuki: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 50">
+  <rect width="80" height="50" fill="#f8f7ff"/>
+  <text x="40" y="37" text-anchor="middle" font-family="Georgia,serif" font-size="34" font-weight="700" fill="none" stroke="#7c6ff7" stroke-width="2.5" stroke-linejoin="round">Ag</text>
+</svg>`,
+          neon: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 50">
+  <defs>
+    <filter id="nf" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="3.5" result="b1"/>
+      <feGaussianBlur in="SourceGraphic" stdDeviation="8" result="b2"/>
+      <feMerge><feMergeNode in="b2"/><feMergeNode in="b2"/><feMergeNode in="b1"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect width="80" height="50" fill="#120820"/>
+  <text x="40" y="37" text-anchor="middle" font-family="Georgia,serif" font-size="34" font-weight="700" fill="#e9d5ff" stroke="#a855f7" stroke-width="1" filter="url(#nf)">Ag</text>
+</svg>`,
+          glitch: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 50">
+  <rect width="80" height="50" fill="#f8f7ff"/>
+  <text x="37" y="37" text-anchor="middle" font-family="Georgia,serif" font-size="34" font-weight="700" fill="#00e5ff" opacity="0.75">Ag</text>
+  <text x="43" y="37" text-anchor="middle" font-family="Georgia,serif" font-size="34" font-weight="700" fill="#ff0090" opacity="0.75">Ag</text>
+  <text x="40" y="37" text-anchor="middle" font-family="Georgia,serif" font-size="34" font-weight="700" fill="#7c6ff7">Ag</text>
+</svg>`,
+        };
+        const effectDefs = [
+          { id:'normal',     label:'通常'       },
+          { id:'fukuro',     label:'袋文字'     },
+          { id:'background', label:'背景'       },
+          { id:'splice',     label:'スプライス' },
+          { id:'nuki',       label:'中抜き'     },
+          { id:'neon',       label:'ネオン'     },
+          { id:'glitch',     label:'グリッチ'   },
+        ];
+        const curEffect = d.text_effect || 'normal';
         html += `
           <div class="prop-group">
             <label>テキスト内容</label>
@@ -1467,18 +1697,43 @@
             <div style="flex:1"><label>サイズ(pt)</label><input type="number" step="0.5" id="prop-fs-pt" value="${d.font_size_pt ? d.font_size_pt.toFixed(1) : (d.font_size / 0.352778).toFixed(1)}"></div>
             <div style="flex:1"><label>文字間(mm)</label><input type="number" step="0.5" id="prop-ls" value="${d.letter_spacing || 0}"></div>
           </div>
-          <div class="prop-group">
-            <label>スタイル</label>
-            <div style="display:flex; gap:6px; flex-wrap:wrap;">
-              <button id="btn-italic" class="btn btn-primary" style="flex:1; min-width:60px; ${d.font_style === 'italic' ? 'background:var(--accent);color:white;border-color:var(--accent);' : ''}" title="イタリック"><i>I</i></button>
-              <button id="btn-underline" class="btn btn-primary" style="flex:1; min-width:60px; ${d.text_underline ? 'background:var(--accent);color:white;border-color:var(--accent);' : ''}" title="下線"><u>U</u></button>
-              <button id="btn-linethrough" class="btn btn-primary" style="flex:1; min-width:60px; ${d.text_linethrough ? 'background:var(--accent);color:white;border-color:var(--accent);' : ''}" title="取り消し線"><s>S</s></button>
+          <div class="prop-group" style="padding:8px; background:rgba(124,111,247,0.05); border-radius:6px; margin-bottom:6px;">
+            <label style="font-size:10px; color:var(--accent); font-weight:700; text-transform:uppercase; letter-spacing:0.05em;">🎨 塗り Fill</label>
+            <div style="display:flex; gap:4px; margin-top:4px; align-items:center;">
+              <input type="color" id="prop-color-picker" value="${(d.color||'#000000').slice(0,7)}" style="width:32px;height:28px;padding:1px;border:none;border-radius:4px;cursor:pointer;flex-shrink:0;">
+              <input type="text" id="prop-color" value="${d.color || '#000000'}" style="flex:1; font-size:11px; font-family:monospace;">
+            </div>
+            <div style="display:grid; grid-template-columns:repeat(12,1fr); gap:3px; margin-top:6px;">
+              ${['#000000','#FFFFFF','#FF0000','#FF8800','#FFFF00','#00CC00','#0088FF','#8800FF','#FF00FF','#CCCCCC','#884400','#004488'].map(c=>`<div onclick="(function(){var i=document.getElementById('prop-color');i.value='${c}';i.dispatchEvent(new Event('input'));document.getElementById('prop-color-picker').value='${c}';})()"
+                style="background:${c};border:1px solid rgba(255,255,255,0.2);border-radius:2px;height:14px;cursor:pointer;"></div>`).join('')}
+            </div>
+          </div>
+          <div class="prop-group" style="padding:8px; background:rgba(247,112,176,0.05); border-radius:6px; margin-bottom:6px;">
+            <label style="font-size:10px; color:#f770b0; font-weight:700; text-transform:uppercase; letter-spacing:0.05em;">✏️ 線 Stroke</label>
+            <div style="display:flex; gap:4px; margin-top:4px; align-items:center;">
+              <input type="color" id="prop-stroke-color-picker" value="${(d.stroke_color||'#ff0000').slice(0,7)}" style="width:32px;height:28px;padding:1px;border:none;border-radius:4px;cursor:pointer;flex-shrink:0;">
+              <input type="text" id="prop-stroke-color" value="${d.stroke_color||''}" placeholder="#FF0000" style="flex:1; font-size:11px; font-family:monospace;">
+              <input type="number" id="prop-stroke-width" value="${d.stroke_width||''}" placeholder="pt" step="0.5" min="0" style="width:48px; font-size:11px;" title="線の太さ(pt)">
+            </div>
+            <div style="display:grid; grid-template-columns:repeat(12,1fr); gap:3px; margin-top:6px;">
+              ${['#000000','#FFFFFF','#FF0000','#FF8800','#FFFF00','#00CC00','#0088FF','#8800FF','#FF00FF','#CCCCCC','#884400','#004488'].map(c=>`<div onclick="(function(){var i=document.getElementById('prop-stroke-color');i.value='${c}';i.dispatchEvent(new Event('input'));document.getElementById('prop-stroke-color-picker').value='${c}';})()"
+                style="background:${c};border:1px solid rgba(255,255,255,0.2);border-radius:2px;height:14px;cursor:pointer;"></div>`).join('')}
             </div>
           </div>
           <div class="prop-group">
-            <label>文字色 (塗り)</label>
-            <input type="text" id="prop-color" value="${d.color || '#000000'}">
-            ${buildPalette('prop-color')}
+            <label style="font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-muted);">文字エフェクト</label>
+            <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:5px; margin-top:6px;">
+              ${effectDefs.map(ef => `
+                <div onclick="window.setTextEffect('${ef.id}')" title="${ef.label}"
+                     style="border-radius:8px; cursor:pointer; overflow:hidden; text-align:center;
+                     background:${curEffect===ef.id ? 'rgba(124,111,247,0.2)' : 'rgba(255,255,255,0.03)'};
+                     border:2px solid ${curEffect===ef.id ? 'var(--accent)' : 'rgba(255,255,255,0.12)'};
+                     transition:all 0.15s; box-shadow:${curEffect===ef.id ? '0 0 8px rgba(124,111,247,0.4)' : 'none'};">
+                  <img src="data:image/svg+xml;charset=utf-8,${encodeURIComponent(EI[ef.id])}"
+                       width="100%" style="display:block; border-radius:6px 6px 0 0; aspect-ratio:8/5; object-fit:cover;">
+                  <div style="font-size:9px; color:${curEffect===ef.id ? 'var(--accent)' : 'var(--text-muted)'}; padding:2px 0 3px; font-weight:${curEffect===ef.id ? '700' : '400'};">${ef.label}</div>
+                </div>`)}
+            </div>
           </div>
           <div class="prop-group">
             <label>テキスト線 (アウトライン)</label>
@@ -1495,6 +1750,10 @@
             ${buildPalette('prop-stroke-color')}
           </div>
         `;
+
+
+
+
       } else if (type === 'image' || type === 'shape') {
         html += `
           <div class="prop-row prop-group">
@@ -1526,6 +1785,8 @@
       bind('prop-w', 'w', true);
       bind('prop-h', 'h', true);
       bind('prop-text', 'text', false, true);
+      bind('prop-stroke-color', 'stroke_color', false, true);
+      bind('prop-stroke-width', 'stroke_width', true, false);
 
       const fontSelect = document.getElementById('prop-font-select');
       if (fontSelect) {
@@ -1552,45 +1813,69 @@
       bind('prop-ls', 'letter_spacing', true);
       bind('prop-color', type === 'shape' ? 'fill' : 'color', false, true);
 
-      if (type === 'text') {
-        // アウトライン（stroke）
-        bind('prop-stroke-color', 'stroke_color', false, true);
-        bind('prop-stroke-width', 'stroke_width', true);
-
-        // イタリック
-        const btnItalic = document.getElementById('btn-italic');
-        if (btnItalic) {
-          btnItalic.addEventListener('click', () => {
-            d.font_style = (d.font_style === 'italic') ? 'normal' : 'italic';
-            renderCanvas();
-            renderProperties();
-            saveHistory();
-          });
-        }
-
-        // 下線
-        const btnUnderline = document.getElementById('btn-underline');
-        if (btnUnderline) {
-          btnUnderline.addEventListener('click', () => {
-            d.text_underline = !d.text_underline;
-            renderCanvas();
-            renderProperties();
-            saveHistory();
-          });
-        }
-
-        // 取り消し線
-        const btnLinethrough = document.getElementById('btn-linethrough');
-        if (btnLinethrough) {
-          btnLinethrough.addEventListener('click', () => {
-            d.text_linethrough = !d.text_linethrough;
-            renderCanvas();
-            renderProperties();
-            saveHistory();
-          });
-        }
+      // カラーピッカー連携
+      const cpFill = document.getElementById('prop-color-picker');
+      if (cpFill) {
+        cpFill.addEventListener('input', e => {
+          const textEl = document.getElementById('prop-color');
+          if (textEl) { textEl.value = e.target.value; textEl.dispatchEvent(new Event('input')); }
+        });
+      }
+      const cpStroke = document.getElementById('prop-stroke-color-picker');
+      if (cpStroke) {
+        cpStroke.addEventListener('input', e => {
+          const textEl = document.getElementById('prop-stroke-color');
+          if (textEl) { textEl.value = e.target.value; textEl.dispatchEvent(new Event('input')); }
+        });
       }
     }
+
+    // ── リサイズハンドル操作 ──
+    let isResizing = false;
+    let resizeDir = '';
+    let resizeObj = null;
+    let resizeStartX = 0, resizeStartY = 0;
+    let resizeStartState = null;
+
+    document.addEventListener('mousedown', e => {
+      const handle = e.target.closest('.resize-handle');
+      if (!handle) return;
+      e.stopPropagation();
+      e.preventDefault();
+      isResizing = true;
+      resizeDir = handle.dataset.dir;
+      const targetId = handle.dataset.targetId;
+      const targetType = handle.dataset.targetType;
+      resizeObj = targetType === 'shape'
+        ? state.shapes.find(x => x._id === targetId)
+        : state.images.find(x => x._id === targetId);
+      if (!resizeObj) { isResizing = false; return; }
+      resizeStartX = e.clientX;
+      resizeStartY = e.clientY;
+      resizeStartState = { x: resizeObj.x, y: resizeObj.y, w: resizeObj.w, h: resizeObj.h };
+    }, true);
+
+    document.addEventListener('mousemove', e => {
+      if (!isResizing || !resizeObj) return;
+      const dx = (e.clientX - resizeStartX) / scale / 10;
+      const dy = (e.clientY - resizeStartY) / scale / 10;
+      const s = resizeStartState;
+      const minSz = 2;
+      if (resizeDir.includes('e')) resizeObj.w = Math.max(minSz, s.w + dx);
+      if (resizeDir.includes('s')) resizeObj.h = Math.max(minSz, s.h + dy);
+      if (resizeDir.includes('w')) { resizeObj.x = s.x + dx; resizeObj.w = Math.max(minSz, s.w - dx); }
+      if (resizeDir.includes('n')) { resizeObj.y = s.y + dy; resizeObj.h = Math.max(minSz, s.h - dy); }
+      renderCanvas();
+    }, true);
+
+    document.addEventListener('mouseup', e => {
+      if (!isResizing) return;
+      isResizing = false;
+      resizeObj = null;
+      saveHistory();
+    }, true);
+
+
 
     // ── ロゴ追加 ──
     addLogoBtn.addEventListener('click', () => logoInput.click());
@@ -1650,6 +1935,18 @@
       dlSvgBtn.disabled = true;
       const prevHtml = dlSvgBtn.innerHTML;
       dlSvgBtn.innerHTML = '<span class="loader"></span>生成中...';
+      const triggerSvgDownload = (svgContent, fileName) => {
+        const blob = new Blob([svgContent], { type: 'image/svg+xml' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      };
 
       const cleanData = {
         card_size_mm: { w: 94, h: 58 },
@@ -1684,18 +1981,12 @@
             await writable.write(svgContent);
             await writable.close();
             alert('保存が完了しました。');
-          } catch (err) { }
+          } catch (err) {
+            if (err?.name === 'AbortError') return;
+            triggerSvgDownload(svgContent, fileName);
+          }
         } else {
-          const blob = new Blob([svgContent], { type: 'image/svg+xml' });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.style.display = 'none';
-          a.href = url;
-          a.download = fileName;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          URL.revokeObjectURL(url);
+          triggerSvgDownload(svgContent, fileName);
         }
       } catch (e) {
         alert('SVG生成エラー: ' + e.message);

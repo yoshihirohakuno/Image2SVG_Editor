@@ -6,7 +6,6 @@ svg_builder.py - SVG生成モジュール
 from __future__ import annotations
 import svgwrite
 from svgwrite import Drawing
-from src.font_mapper import get_font_family, get_font_weight
 
 
 def hex_to_cmyk_string(hex_color: str) -> str:
@@ -62,6 +61,27 @@ GOOGLE_FONTS_URL = (
 )
 
 
+def _apply_paint_attrs(element, fill=None, stroke=None, stroke_width_mm=0,
+                       paint_order=None, opacity=None, letter_spacing_mm=None,
+                       extra_attrs: dict | None = None) -> None:
+    """Illustrator が解釈しやすいよう presentation attributes で色と線を付与する。"""
+    element.attribs["fill"] = fill if fill else "none"
+    element.attribs["stroke"] = stroke if stroke and stroke_width_mm > 0 else "none"
+    if stroke and stroke_width_mm > 0:
+        element.attribs["stroke-width"] = f"{round(stroke_width_mm, 4)}mm"
+        element.attribs["stroke-linejoin"] = "round"
+        element.attribs["stroke-miterlimit"] = "10"
+        if paint_order:
+            element.attribs["paint-order"] = paint_order
+    if opacity is not None:
+        element.attribs["opacity"] = opacity
+    if letter_spacing_mm is not None and letter_spacing_mm > 0:
+        element.attribs["letter-spacing"] = f"{letter_spacing_mm}mm"
+    if extra_attrs:
+        for key, value in extra_attrs.items():
+            element.attribs[key] = value
+
+
 def build_svg(intermediate: dict, output_path: str) -> str:
     """
     中間 JSON データから SVG ファイルを生成する
@@ -83,6 +103,7 @@ def build_svg(intermediate: dict, output_path: str) -> str:
         size=(f"{CARD_W_MM}mm", f"{CARD_H_MM}mm"),
         viewBox=f"0 0 {CARD_W_MM} {CARD_H_MM}",
         profile="full",
+        debug=False,
     )
 
     # --- スタイル定義（Google Fonts）---
@@ -135,129 +156,199 @@ def build_svg(intermediate: dict, output_path: str) -> str:
 
 
 def _add_text(group, dwg: Drawing, t: dict) -> None:
-    """テキストブロックを SVG <text> として追加する"""
+    """テキストブロックをアウトライン化したSVGパスとして追加する（エフェクト対応・Illustrator互換）"""
+    color = t.get("color", "#000000")
+    font_size = float(t.get("font_size", 3))
+    effect = t.get("text_effect", "normal") or "normal"
+    stroke_color = t.get("stroke_color") or ""
+    stroke_width_pt = t.get("stroke_width") or 0
+    stroke_width_mm = float(stroke_width_pt) * 0.352778 if stroke_width_pt else 0
+
+    # ── アウトライン化を試みる ──
+    outline_paths = None
+    try:
+        from src.text_outliner import outline_text_block
+        outline_paths = outline_text_block(t)
+    except Exception as e:
+        print(f"[svg_builder] アウトライン化失敗（テキスト描画にフォールバック）: {e}")
+
+    if outline_paths:
+        # ── パスにエフェクトを適用 ──
+        _add_outlined_text(group, dwg, t, outline_paths, color, stroke_color,
+                           stroke_width_mm, font_size, effect)
+    else:
+        # ── フォールバック: 通常テキスト描画 ──
+        _add_text_fallback(group, dwg, t)
+
+
+def _add_outlined_text(group, dwg, t, outline_paths, color, stroke_color,
+                        stroke_width_mm, font_size, effect):
+    """アウトライン化済みパスにエフェクトを適用してSVGに追加する"""
+    from xml.etree import ElementTree as ET
+
+    _add_text._count = getattr(_add_text, "_count", 0) + 1
+
+    def add_paths(fill_val, stroke_val=None, sw=0, paint_order=None,
+                  opacity=None, dx=0, dy=0, extra_style="", filter_ref=None):
+        """パスセットを group に追加するヘルパー"""
+        for p in outline_paths:
+            d = p["d"]
+            extra_attrs = {}
+            if extra_style:
+                extra_attrs["style"] = extra_style
+            if filter_ref:
+                extra_attrs["filter"] = f"url(#{filter_ref})"
+            if dx != 0 or dy != 0:
+                pe = dwg.path(d=d, transform=f"translate({round(dx,4)},{round(dy,4)})")
+            else:
+                pe = dwg.path(d=d)
+            _apply_paint_attrs(
+                pe,
+                fill=None if fill_val == "none" else fill_val,
+                stroke=stroke_val,
+                stroke_width_mm=sw,
+                paint_order=paint_order,
+                opacity=opacity,
+                extra_attrs=extra_attrs,
+            )
+            group.add(pe)
+
+    # ── エフェクト別レンダリング ──
+
+    if effect == "fukuro":
+        # 袋文字: 太いStrokeを後ろに描き、Fillを前面
+        sw = stroke_width_mm if stroke_width_mm > 0 else font_size * 0.15
+        sc = stroke_color if stroke_color else "#7c6ff7"
+        add_paths(color, sc, sw * 2, paint_order="stroke fill")
+
+    elif effect == "background":
+        # 背景: 色付きrect + テキストパス
+        bg_color = stroke_color if stroke_color else "#7c6ff7"
+        x = t.get("x", 0); y = t.get("y", 0)
+        pad = font_size * 0.15
+        rect_h = font_size * len((t.get("text") or "").split("\n")) * 1.2
+        bg_rect = dwg.rect(
+            insert=(x - pad, y - pad),
+            size=(CARD_W_MM - x + pad, rect_h + pad * 2),
+            fill=bg_color,
+            rx=font_size * 0.1,
+        )
+        group.add(bg_rect)
+        add_paths(color)
+
+    elif effect == "splice":
+        off = font_size * 0.08
+        sc = stroke_color if stroke_color else "#bbaaff"
+        sw_back = stroke_width_mm if stroke_width_mm > 0 else font_size * 0.05
+        sw_front = stroke_width_mm * 0.5 if stroke_width_mm > 0 else font_size * 0.02
+        add_paths("none", sc, sw_back, dx=off, dy=off * 0.5)
+        add_paths(color, sc, sw_front, paint_order="stroke fill")
+
+    elif effect == "nuki":
+        sc = stroke_color if stroke_color else color
+        sw = stroke_width_mm if stroke_width_mm > 0 else font_size * 0.06
+        add_paths("none", sc, sw)
+
+    elif effect == "neon":
+        # ネオン: SVGフィルター（Illustratorでも保持される）
+        fid = f"neon-{_add_text._count}"
+        filt_el = ET.SubElement(dwg.defs.get_xml(), "filter")
+        filt_el.set("id", fid)
+        filt_el.set("x", "-60%"); filt_el.set("y", "-60%")
+        filt_el.set("width", "220%"); filt_el.set("height", "220%")
+        b1 = ET.SubElement(filt_el, "feGaussianBlur")
+        b1.set("in", "SourceGraphic"); b1.set("stdDeviation", str(round(font_size * 0.3, 2))); b1.set("result", "b1")
+        b2 = ET.SubElement(filt_el, "feGaussianBlur")
+        b2.set("in", "SourceGraphic"); b2.set("stdDeviation", str(round(font_size * 0.7, 2))); b2.set("result", "b2")
+        merge = ET.SubElement(filt_el, "feMerge")
+        for v in ["b2", "b2", "b1", "SourceGraphic"]:
+            mn = ET.SubElement(merge, "feMergeNode"); mn.set("in", v)
+        sc = stroke_color if stroke_color else "#a855f7"
+        sw = max(stroke_width_mm, font_size * 0.03)
+        add_paths(color, sc, sw, filter_ref=fid)
+
+    elif effect == "glitch":
+        off = font_size * 0.06
+        add_paths("#00e5ff", opacity=0.8, dx=-off)
+        add_paths("#ff0090", opacity=0.8, dx=off)
+        add_paths(color)
+
+    else:
+        # 通常
+        sw = stroke_width_mm if (stroke_color and stroke_width_mm > 0) else 0
+        add_paths(color, stroke_color if sw > 0 else None, sw,
+                  paint_order="stroke fill" if sw > 0 else None)
+
+
+def _add_text_fallback(group, dwg: Drawing, t: dict) -> None:
+    """アウトライン化が失敗した際のフォールバック: 従来テキスト描画"""
     x = t.get("x", 0)
     y = t.get("y", 0)
     text_str = t.get("text", "")
     color = t.get("color", "#000000")
-    font_group = t.get("font_group", "gothic")
     font_size = t.get("font_size", 3)
     letter_spacing = t.get("letter_spacing", 0.0)
-
     font_family = t.get("font_family", "Noto Sans JP")
     font_weight = str(t.get("font_weight", "400"))
-    
-    # Illustratorは font-family="'Noto Sans JP', sans-serif" のような
-    # クォーテーションや代替フォント（カンマ区切り）が含まれるとフォント名解析に失敗し、
-    # ペナルティとしてテキストの塗りや線のスタイル情報まで一緒に破棄（初期化）してしまうバグがあるため、
-    # 純粋なフォント名のみをクォートなしで渡す。
+    stroke_color = t.get("stroke_color") or ""
+    stroke_width_pt = t.get("stroke_width") or 0
+    stroke_width_mm = float(stroke_width_pt) * 0.352778 if stroke_width_pt else 0
     ff_str = font_family
 
-    # 静的カウンタ（IDを一意にする）
+    baseline_y = round(y + font_size * 0.85, 3)
     _add_text._count = getattr(_add_text, "_count", 0) + 1
     role = t.get("role", "other")
-
-    # ★ font-size は単位なし数値で指定（viewBox座標系 = mm 系）
-    #   "Xmm" の絶対単位を使うと SVG スケーリング時に座標系と乖離する
-    # ★ baseline 補正: SVG の text は baseline 基準
-    baseline_y = round(y + font_size * 0.85, 3)
-
-    extra = {}
-    if letter_spacing and letter_spacing > 0:
-        extra["letter_spacing"] = letter_spacing  # svgwrite は letter-spacing に変換
-
-    # テキスト等装飾の物理化 (Illustrator等での互換性対応)
-    
-    # イタリック: Illustratorが和文フォントの斜体に非対応な場合が多いため、transformで物理的に傾ける
     transform_val = ""
     if t.get("font_style") == "italic":
-        # 基点(x, baseline_y)でskewXする
         transform_val = f"translate({x},{baseline_y}) skewX(-15) translate({-x},{-baseline_y})"
-        extra["transform"] = transform_val
-
-    # アウトライン (stroke): Illustratorがstyleタグ内の不正な構文でエラーを起こすのを防ぐため属性で指定
-    stroke_color = t.get("stroke_color")
-    stroke_width = t.get("stroke_width", 0)
-    if stroke_color and stroke_width > 0:
-        extra["stroke"] = stroke_color
-        extra["stroke_width"] = stroke_width
-
-    # Illustratorは <text> ではなく中の <tspan> に直接色塗りを指定しないと
-    # 黒色(継承バグ)になってしまうことがあるため、スタイル系属性は tspan にも直接渡す準備をする
-    tspan_style = {
-        "fill": color,
-        "font_family": ff_str,
-        "font_size": font_size,
-        "font_weight": font_weight,
-    }
-    if "letter_spacing" in extra:
-        tspan_style["letter_spacing"] = extra["letter_spacing"]
-    if stroke_color and stroke_width > 0:
-        tspan_style["stroke"] = stroke_color
-        tspan_style["stroke_width"] = stroke_width
 
     text_elem = dwg.text(
-        "",
-        insert=(x, baseline_y),
-        fill=color,
-        font_family=ff_str,
-        font_size=font_size,
-        font_weight=font_weight,
+        "", insert=(x, baseline_y),
+        fill=color, font_family=ff_str,
+        font_size=font_size, font_weight=font_weight,
         id=f"{role}_{_add_text._count}",
-        **extra,
     )
-
+    if transform_val:
+        text_elem.attribs["transform"] = transform_val
+    _apply_paint_attrs(
+        text_elem,
+        fill=color,
+        stroke=stroke_color if stroke_width_mm > 0 else None,
+        stroke_width_mm=stroke_width_mm,
+        paint_order="stroke fill" if stroke_width_mm > 0 else None,
+        letter_spacing_mm=letter_spacing if letter_spacing and letter_spacing > 0 else None,
+    )
     lines = text_str.split("\n")
-    if len(lines) == 1:
-        # 1行のみの場合は tspan を使わず直接テキストを入れる（Illustrator最適化）
-        text_elem.text = lines[0]
-    else:
-        for i, line in enumerate(lines):
-            if i == 0:
-                t_span = dwg.tspan(line, x=[x], **tspan_style)
-            else:
-                t_span = dwg.tspan(line, x=[x], dy=["1.2em"], **tspan_style)
-            text_elem.add(t_span)
-
+    for i, line in enumerate(lines):
+        text_elem.add(dwg.tspan(line, x=[x]) if i == 0 else dwg.tspan(line, x=[x], dy=["1.2em"]))
     group.add(text_elem)
 
-    # 下線・取り消し線を物理的な <line> 要素として描画 (Illustratorで無視されないように)
     has_ul = t.get("text_underline")
     has_st = t.get("text_linethrough")
-    
     if has_ul or has_st:
-        max_len = max([len(l) for l in lines] + [1]) # div-zero対策
-        render_w = t.get("render_width", font_size * max_len * 0.8) # JSから取得した描画幅(無い場合のフォールバック)
-        
-        line_thickness = max(font_size * 0.08, 0.2) # 線の太さ（最低0.2mm）
-        dec_color = color # テキスト本体の色に合わせる
-        dec_cmyk = hex_to_cmyk_string(dec_color)
-        
+        max_len = max([len(l) for l in lines] + [1])
+        render_w = t.get("render_width", font_size * max_len * 0.8)
+        line_thickness = max(font_size * 0.08, 0.2)
         line_group = dwg.g()
         if transform_val:
-            line_group["transform"] = transform_val
-            
+            line_group.attribs["transform"] = transform_val
         for i, line in enumerate(lines):
             ratio = len(line) / max_len if max_len > 0 else 1.0
             cur_line_w = render_w * ratio
             line_base_y = round(baseline_y + i * (font_size * 1.2), 3)
-            
             if has_ul:
-                # 下線のY位置：ベースラインから少し下（フォントサイズの12%分）
                 uy = line_base_y + font_size * 0.12
-                line_group.add(dwg.line(start=(x, uy), end=(x + cur_line_w, uy), 
-                                        stroke=dec_color, stroke_width=line_thickness, 
-                                        style=f"stroke: {dec_cmyk};"))
+                line_group.add(dwg.line(
+                    start=(x, uy), end=(x + cur_line_w, uy),
+                    stroke=color, stroke_width=line_thickness
+                ))
             if has_st:
-                # 取消線のY位置：ベースラインから少し上（フォントサイズの35%分）
                 sy = line_base_y - font_size * 0.35
-                line_group.add(dwg.line(start=(x, sy), end=(x + cur_line_w, sy), 
-                                        stroke=dec_color, stroke_width=line_thickness, 
-                                        style=f"stroke: {dec_cmyk};"))
+                line_group.add(dwg.line(
+                    start=(x, sy), end=(x + cur_line_w, sy),
+                    stroke=color, stroke_width=line_thickness
+                ))
         group.add(line_group)
-
-
-
 def _add_shape(group, dwg: Drawing, s: dict) -> None:
     """図形データを SVG 要素として追加する"""
     x = s.get("x", 0)
