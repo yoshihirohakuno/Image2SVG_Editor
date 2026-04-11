@@ -168,7 +168,29 @@ def _add_text(group, dwg: Drawing, t: dict) -> None:
         extra["letter_spacing"] = letter_spacing  # svgwrite は letter-spacing に変換
 
     cmyk_val = hex_to_cmyk_string(color)
-    extra["style"] = f"fill: {cmyk_val};"
+    style_str = f"fill: {cmyk_val};"
+
+    # テキスト装飾 (text-decoration)
+    decorations = []
+    if t.get("text_underline"): decorations.append("underline")
+    if t.get("text_linethrough"): decorations.append("line-through")
+    if decorations:
+        extra["text_decoration"] = " ".join(decorations)
+
+    # イタリック (font-style)
+    if t.get("font_style") == "italic":
+        extra["font_style"] = "italic"
+
+    # アウトライン (stroke)
+    stroke_color = t.get("stroke_color")
+    stroke_width = t.get("stroke_width", 0)
+    if stroke_color and stroke_width > 0:
+        stroke_cmyk = hex_to_cmyk_string(stroke_color)
+        style_str += f" stroke: {stroke_cmyk}; stroke-width: {stroke_width}; paint-order: stroke fill;"
+        extra["stroke"] = stroke_color
+        extra["stroke_width"] = stroke_width
+
+    extra["style"] = style_str
 
     text_elem = dwg.text(
         "",
