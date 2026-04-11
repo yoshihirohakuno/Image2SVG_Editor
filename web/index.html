@@ -812,6 +812,21 @@
 
         if (t.letter_spacing > 0) el.style.letterSpacing = (t.letter_spacing * 10) + 'px';
 
+        // テキスト装飾
+        if (t.font_style === 'italic') el.style.fontStyle = 'italic';
+        const decorations = [];
+        if (t.text_underline) decorations.push('underline');
+        if (t.text_linethrough) decorations.push('line-through');
+        if (decorations.length) el.style.textDecoration = decorations.join(' ');
+
+        // テキストアウトライン（stroke） - WebKitのtext-strokeを使用
+        if (t.stroke_color && t.stroke_width > 0) {
+          el.style.webkitTextStroke = `${t.stroke_width * 10}px ${t.stroke_color}`;
+          el.style.paintOrder = 'stroke fill';
+        } else {
+          el.style.webkitTextStroke = '';
+        }
+
         if (state.selectedItems.some(i => i.id === t._id)) el.classList.add('selected');
         canvas.appendChild(el);
       });
@@ -1453,9 +1468,31 @@
             <div style="flex:1"><label>文字間(mm)</label><input type="number" step="0.5" id="prop-ls" value="${d.letter_spacing || 0}"></div>
           </div>
           <div class="prop-group">
-            <label>文字色Hex (RGB)</label>
+            <label>スタイル</label>
+            <div style="display:flex; gap:6px; flex-wrap:wrap;">
+              <button id="btn-italic" class="btn btn-primary" style="flex:1; min-width:60px; ${d.font_style === 'italic' ? 'background:var(--accent);color:white;border-color:var(--accent);' : ''}" title="イタリック"><i>I</i></button>
+              <button id="btn-underline" class="btn btn-primary" style="flex:1; min-width:60px; ${d.text_underline ? 'background:var(--accent);color:white;border-color:var(--accent);' : ''}" title="下線"><u>U</u></button>
+              <button id="btn-linethrough" class="btn btn-primary" style="flex:1; min-width:60px; ${d.text_linethrough ? 'background:var(--accent);color:white;border-color:var(--accent);' : ''}" title="取り消し線"><s>S</s></button>
+            </div>
+          </div>
+          <div class="prop-group">
+            <label>文字色 (塗り)</label>
             <input type="text" id="prop-color" value="${d.color || '#000000'}">
             ${buildPalette('prop-color')}
+          </div>
+          <div class="prop-group">
+            <label>テキスト線 (アウトライン)</label>
+            <div style="display:flex; gap:8px; align-items:center;">
+              <div style="flex:1">
+                <label style="font-size:11px;">線色</label>
+                <input type="text" id="prop-stroke-color" value="${d.stroke_color || '#000000'}" placeholder="#000000">
+              </div>
+              <div style="width:80px">
+                <label style="font-size:11px;">線幅(mm)</label>
+                <input type="number" step="0.05" min="0" id="prop-stroke-width" value="${d.stroke_width || 0}">
+              </div>
+            </div>
+            ${buildPalette('prop-stroke-color')}
           </div>
         `;
       } else if (type === 'image' || type === 'shape') {
@@ -1514,6 +1551,45 @@
 
       bind('prop-ls', 'letter_spacing', true);
       bind('prop-color', type === 'shape' ? 'fill' : 'color', false, true);
+
+      if (type === 'text') {
+        // アウトライン（stroke）
+        bind('prop-stroke-color', 'stroke_color', false, true);
+        bind('prop-stroke-width', 'stroke_width', true);
+
+        // イタリック
+        const btnItalic = document.getElementById('btn-italic');
+        if (btnItalic) {
+          btnItalic.addEventListener('click', () => {
+            d.font_style = (d.font_style === 'italic') ? 'normal' : 'italic';
+            renderCanvas();
+            renderProperties();
+            saveHistory();
+          });
+        }
+
+        // 下線
+        const btnUnderline = document.getElementById('btn-underline');
+        if (btnUnderline) {
+          btnUnderline.addEventListener('click', () => {
+            d.text_underline = !d.text_underline;
+            renderCanvas();
+            renderProperties();
+            saveHistory();
+          });
+        }
+
+        // 取り消し線
+        const btnLinethrough = document.getElementById('btn-linethrough');
+        if (btnLinethrough) {
+          btnLinethrough.addEventListener('click', () => {
+            d.text_linethrough = !d.text_linethrough;
+            renderCanvas();
+            renderProperties();
+            saveHistory();
+          });
+        }
+      }
     }
 
     // ── ロゴ追加 ──
