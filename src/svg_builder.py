@@ -147,12 +147,11 @@ def _add_text(group, dwg: Drawing, t: dict) -> None:
     font_family = t.get("font_family", "Noto Sans JP")
     font_weight = str(t.get("font_weight", "400"))
     
-    if font_family == "Noto Serif JP":
-        ff_str = "'Noto Serif JP', serif"
-    elif font_family == "Noto Sans JP":
-        ff_str = "'Noto Sans JP', sans-serif"
-    else:
-        ff_str = f"'{font_family}', sans-serif"
+    # Illustratorは font-family="'Noto Sans JP', sans-serif" のような
+    # クォーテーションや代替フォント（カンマ区切り）が含まれるとフォント名解析に失敗し、
+    # ペナルティとしてテキストの塗りや線のスタイル情報まで一緒に破棄（初期化）してしまうバグがあるため、
+    # 純粋なフォント名のみをクォートなしで渡す。
+    ff_str = font_family
 
     # 静的カウンタ（IDを一意にする）
     _add_text._count = getattr(_add_text, "_count", 0) + 1
@@ -209,12 +208,16 @@ def _add_text(group, dwg: Drawing, t: dict) -> None:
     )
 
     lines = text_str.split("\n")
-    for i, line in enumerate(lines):
-        if i == 0:
-            t_span = dwg.tspan(line, x=[x], **tspan_style)
-        else:
-            t_span = dwg.tspan(line, x=[x], dy=["1.2em"], **tspan_style)
-        text_elem.add(t_span)
+    if len(lines) == 1:
+        # 1行のみの場合は tspan を使わず直接テキストを入れる（Illustrator最適化）
+        text_elem.text = lines[0]
+    else:
+        for i, line in enumerate(lines):
+            if i == 0:
+                t_span = dwg.tspan(line, x=[x], **tspan_style)
+            else:
+                t_span = dwg.tspan(line, x=[x], dy=["1.2em"], **tspan_style)
+            text_elem.add(t_span)
 
     group.add(text_elem)
 
