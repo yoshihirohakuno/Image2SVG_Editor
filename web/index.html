@@ -1653,7 +1653,11 @@
 
       const cleanData = {
         card_size_mm: { w: 94, h: 58 },
-        texts: state.texts.map(({ _id, ...rest }) => rest),
+        texts: state.texts.map(({ _id, ...rest }) => {
+          const el = document.querySelector(`.ce[data-id="${_id}"]`);
+          const render_width = el ? el.offsetWidth / 10 : 0;
+          return { ...rest, render_width };
+        }),
         shapes: state.shapes.map(({ _id, ...rest }) => rest),
         images: state.images.map(({ _id, ...rest }) => rest)
       };

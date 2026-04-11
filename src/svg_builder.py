@@ -170,18 +170,16 @@ def _add_text(group, dwg: Drawing, t: dict) -> None:
     cmyk_val = hex_to_cmyk_string(color)
     style_str = f"fill: {cmyk_val};"
 
-    # テキスト装飾 (text-decoration)
-    decorations = []
-    if t.get("text_underline"): decorations.append("underline")
-    if t.get("text_linethrough"): decorations.append("line-through")
-    if decorations:
-        extra["text_decoration"] = " ".join(decorations)
-
-    # イタリック (font-style)
+    # テキスト等装飾の物理化 (Illustrator等での互換性対応)
+    
+    # イタリック: Illustratorが和文フォントの斜体に非対応な場合が多いため、transformで物理的に傾ける
+    transform_val = ""
     if t.get("font_style") == "italic":
-        extra["font_style"] = "italic"
+        # 基点(x, baseline_y)でskewXする
+        transform_val = f"translate({x},{baseline_y}) skewX(-15) translate({-x},{-baseline_y})"
+        extra["transform"] = transform_val
 
-    # アウトライン (stroke)
+    # アウトライン (stroke): 元々パスの境界に効くのでそのまま指定
     stroke_color = t.get("stroke_color")
     stroke_width = t.get("stroke_width", 0)
     if stroke_color and stroke_width > 0:
@@ -212,6 +210,41 @@ def _add_text(group, dwg: Drawing, t: dict) -> None:
         text_elem.add(t_span)
 
     group.add(text_elem)
+
+    # 下線・取り消し線を物理的な <line> 要素として描画 (Illustratorで無視されないように)
+    has_ul = t.get("text_underline")
+    has_st = t.get("text_linethrough")
+    
+    if has_ul or has_st:
+        max_len = max([len(l) for l in lines] + [1]) # div-zero対策
+        render_w = t.get("render_width", font_size * max_len * 0.8) # JSから取得した描画幅(無い場合のフォールバック)
+        
+        line_thickness = max(font_size * 0.08, 0.2) # 線の太さ（最低0.2mm）
+        dec_color = color # テキスト本体の色に合わせる
+        dec_cmyk = hex_to_cmyk_string(dec_color)
+        
+        line_group = dwg.g()
+        if transform_val:
+            line_group["transform"] = transform_val
+            
+        for i, line in enumerate(lines):
+            ratio = len(line) / max_len if max_len > 0 else 1.0
+            cur_line_w = render_w * ratio
+            line_base_y = round(baseline_y + i * (font_size * 1.2), 3)
+            
+            if has_ul:
+                # 下線のY位置：ベースラインから少し下（フォントサイズの12%分）
+                uy = line_base_y + font_size * 0.12
+                line_group.add(dwg.line(start=(x, uy), end=(x + cur_line_w, uy), 
+                                        stroke=dec_color, stroke_width=line_thickness, 
+                                        style=f"stroke: {dec_cmyk};"))
+            if has_st:
+                # 取消線のY位置：ベースラインから少し上（フォントサイズの35%分）
+                sy = line_base_y - font_size * 0.35
+                line_group.add(dwg.line(start=(x, sy), end=(x + cur_line_w, sy), 
+                                        stroke=dec_color, stroke_width=line_thickness, 
+                                        style=f"stroke: {dec_cmyk};"))
+        group.add(line_group)
 
 
 
