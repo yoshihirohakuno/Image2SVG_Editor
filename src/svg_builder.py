@@ -167,9 +167,6 @@ def _add_text(group, dwg: Drawing, t: dict) -> None:
     if letter_spacing and letter_spacing > 0:
         extra["letter_spacing"] = letter_spacing  # svgwrite は letter-spacing に変換
 
-    cmyk_val = hex_to_cmyk_string(color)
-    style_str = f"fill: {cmyk_val};"
-
     # テキスト等装飾の物理化 (Illustrator等での互換性対応)
     
     # イタリック: Illustratorが和文フォントの斜体に非対応な場合が多いため、transformで物理的に傾ける
@@ -179,17 +176,13 @@ def _add_text(group, dwg: Drawing, t: dict) -> None:
         transform_val = f"translate({x},{baseline_y}) skewX(-15) translate({-x},{-baseline_y})"
         extra["transform"] = transform_val
 
-    # アウトライン (stroke): Illustratorがstyleタグ内の単位なしstroke-width等でパースエラーを起こし
-    # 塗りの色ごと無効化するのを防ぐため、CMYK色以外は安全なXMLのプレゼンテーション属性に逃がす
+    # アウトライン (stroke): Illustratorがstyleタグ内の不正な構文やdevice-cmykでエラーを起こすため、
+    # 確実に見えるようXML属性の純粋なHEX値で出力する
     stroke_color = t.get("stroke_color")
     stroke_width = t.get("stroke_width", 0)
     if stroke_color and stroke_width > 0:
-        stroke_cmyk = hex_to_cmyk_string(stroke_color)
-        style_str += f" stroke: {stroke_cmyk};"
         extra["stroke"] = stroke_color
         extra["stroke_width"] = stroke_width
-
-    extra["style"] = style_str
 
     text_elem = dwg.text(
         "",
