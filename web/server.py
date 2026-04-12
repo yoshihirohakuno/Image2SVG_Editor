@@ -14,12 +14,17 @@ from flask import Flask, request, jsonify, send_file, render_template_string
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 最大 16MB
 
-ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".pdf"}
+ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".pdf", ".webp"}
 
 
 def allowed_file(filename: str) -> bool:
     ext = os.path.splitext(filename)[1].lower()
     return ext in ALLOWED_EXTENSIONS
+
+
+@app.errorhandler(413)
+def too_large(_error):
+    return jsonify({"error": "ファイルサイズが大きすぎます（16MB以下にしてください）"}), 413
 
 
 # HTML は同一ファイルに埋め込み（デプロイを簡単にするため）
@@ -57,7 +62,7 @@ def convert():
         return jsonify({"error": "ファイル名が空です"}), 400
 
     if not allowed_file(f.filename):
-        return jsonify({"error": "非対応のファイル形式です（PNG/JPG/PDF のみ）"}), 400
+        return jsonify({"error": "非対応のファイル形式です（PNG/JPG/JPEG/WEBP/PDF のみ）"}), 400
 
     # 一時ファイルに保存
     suffix = os.path.splitext(f.filename)[1].lower()

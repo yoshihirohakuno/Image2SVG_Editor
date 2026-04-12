@@ -219,7 +219,8 @@ def _add_outlined_text(group, dwg, t, outline_paths, color, stroke_color,
         # 袋文字: 太いStrokeを後ろに描き、Fillを前面
         sw = stroke_width_mm if stroke_width_mm > 0 else font_size * 0.15
         sc = stroke_color if stroke_color else "#7c6ff7"
-        add_paths(color, sc, sw * 2, paint_order="stroke fill")
+        add_paths("none", sc, sw * 2)
+        add_paths(color)
 
     elif effect == "background":
         # 背景: 色付きrect + テキストパス
@@ -242,7 +243,8 @@ def _add_outlined_text(group, dwg, t, outline_paths, color, stroke_color,
         sw_back = stroke_width_mm if stroke_width_mm > 0 else font_size * 0.05
         sw_front = stroke_width_mm * 0.5 if stroke_width_mm > 0 else font_size * 0.02
         add_paths("none", sc, sw_back, dx=off, dy=off * 0.5)
-        add_paths(color, sc, sw_front, paint_order="stroke fill")
+        add_paths("none", sc, sw_front)
+        add_paths(color)
 
     elif effect == "nuki":
         sc = stroke_color if stroke_color else color
@@ -276,8 +278,9 @@ def _add_outlined_text(group, dwg, t, outline_paths, color, stroke_color,
     else:
         # 通常
         sw = stroke_width_mm if (stroke_color and stroke_width_mm > 0) else 0
-        add_paths(color, stroke_color if sw > 0 else None, sw,
-                  paint_order="stroke fill" if sw > 0 else None)
+        if sw > 0:
+            add_paths("none", stroke_color, sw)
+        add_paths(color)
 
 
 def _add_text_fallback(group, dwg: Drawing, t: dict) -> None:
@@ -302,6 +305,24 @@ def _add_text_fallback(group, dwg: Drawing, t: dict) -> None:
     if t.get("font_style") == "italic":
         transform_val = f"translate({x},{baseline_y}) skewX(-15) translate({-x},{-baseline_y})"
 
+    text_elem_stroke = None
+    if stroke_color and stroke_width_mm > 0:
+        text_elem_stroke = dwg.text(
+            "", insert=(x, baseline_y),
+            fill="none", font_family=ff_str,
+            font_size=font_size, font_weight=font_weight,
+            id=f"{role}_{_add_text._count}_stroke",
+        )
+        if transform_val:
+            text_elem_stroke.attribs["transform"] = transform_val
+        _apply_paint_attrs(
+            text_elem_stroke,
+            fill=None,
+            stroke=stroke_color,
+            stroke_width_mm=stroke_width_mm,
+            letter_spacing_mm=letter_spacing if letter_spacing and letter_spacing > 0 else None,
+        )
+
     text_elem = dwg.text(
         "", insert=(x, baseline_y),
         fill=color, font_family=ff_str,
@@ -313,14 +334,19 @@ def _add_text_fallback(group, dwg: Drawing, t: dict) -> None:
     _apply_paint_attrs(
         text_elem,
         fill=color,
-        stroke=stroke_color if stroke_width_mm > 0 else None,
-        stroke_width_mm=stroke_width_mm,
-        paint_order="stroke fill" if stroke_width_mm > 0 else None,
+        stroke=None,
+        stroke_width_mm=0,
         letter_spacing_mm=letter_spacing if letter_spacing and letter_spacing > 0 else None,
     )
     lines = text_str.split("\n")
     for i, line in enumerate(lines):
-        text_elem.add(dwg.tspan(line, x=[x]) if i == 0 else dwg.tspan(line, x=[x], dy=["1.2em"]))
+        fill_span = dwg.tspan(line, x=[x]) if i == 0 else dwg.tspan(line, x=[x], dy=["1.2em"])
+        text_elem.add(fill_span)
+        if text_elem_stroke is not None:
+            stroke_span = dwg.tspan(line, x=[x]) if i == 0 else dwg.tspan(line, x=[x], dy=["1.2em"])
+            text_elem_stroke.add(stroke_span)
+    if text_elem_stroke is not None:
+        group.add(text_elem_stroke)
     group.add(text_elem)
 
     has_ul = t.get("text_underline")

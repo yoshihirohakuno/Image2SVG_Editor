@@ -12,6 +12,29 @@ import pathlib
 import tempfile
 import urllib.request
 
+LOCAL_FONT_CANDIDATES: dict[tuple[str, int], list[pathlib.Path]] = {
+    ("Noto Sans JP", 400): [
+        pathlib.Path(r"C:\Windows\Fonts\NotoSansJP-VF.ttf"),
+        pathlib.Path(r"C:\Windows\Fonts\YuGothR.ttc"),
+        pathlib.Path(r"C:\Windows\Fonts\meiryo.ttc"),
+    ],
+    ("Noto Sans JP", 700): [
+        pathlib.Path(r"C:\Windows\Fonts\NotoSansJP-VF.ttf"),
+        pathlib.Path(r"C:\Windows\Fonts\YuGothB.ttc"),
+        pathlib.Path(r"C:\Windows\Fonts\meiryob.ttc"),
+    ],
+    ("Noto Serif JP", 400): [
+        pathlib.Path(r"C:\Windows\Fonts\NotoSerifJP-VF.ttf"),
+        pathlib.Path(r"C:\Windows\Fonts\yumin.ttf"),
+        pathlib.Path(r"C:\Windows\Fonts\msmincho.ttc"),
+    ],
+    ("Noto Serif JP", 700): [
+        pathlib.Path(r"C:\Windows\Fonts\NotoSerifJP-VF.ttf"),
+        pathlib.Path(r"C:\Windows\Fonts\yumindb.ttf"),
+        pathlib.Path(r"C:\Windows\Fonts\BIZ-UDMinchoM.ttc"),
+    ],
+}
+
 # ── Google Fonts の TTF 直リンク（Static サブセット） ──
 # wght@400 と wght@700 のみ用意。必要に応じて追加可能。
 FONT_URLS: dict[tuple[str, int], str] = {
@@ -29,7 +52,7 @@ FONT_URLS: dict[tuple[str, int], str] = {
     ),
 }
 
-_font_cache: dict[str, object] = {}  # path -> TTFont
+_font_cache: dict[tuple[str, int], object] = {}  # (path, weight) -> TTFont
 
 
 def _ensure_cache_dir() -> pathlib.Path:
@@ -59,13 +82,19 @@ def _ensure_cache_dir() -> pathlib.Path:
 
 
 def _get_font_path(family: str, weight: int) -> pathlib.Path | None:
-    """フォントファイルのパスを返す（必要に応じてダウンロード）"""
-    # weight を既存キー {400,700} に丸める
+    """フォントファイルのパスを返す（まずローカル、なければダウンロード）"""
     w = 700 if weight >= 600 else 400
+
+    for candidate in LOCAL_FONT_CANDIDATES.get((family, w), []):
+        if candidate.exists():
+            return candidate
+
     key = (family, w)
     url = FONT_URLS.get(key)
     if not url:
-        # フォールバック: Noto Sans JP Regular
+        for fallback in LOCAL_FONT_CANDIDATES.get(("Noto Sans JP", 400), []):
+            if fallback.exists():
+                return fallback
         key = ("Noto Sans JP", 400)
         url = FONT_URLS[key]
 
@@ -79,18 +108,30 @@ def _get_font_path(family: str, weight: int) -> pathlib.Path | None:
     return fpath
 
 
-def _load_ttfont(fpath: pathlib.Path):
-    """fonttools TTFont をロード（キャッシュ付き）"""
-    key = str(fpath)
-    if key not in _font_cache:
-        from fonttools.ttLib import TTFont
-        _font_cache[key] = TTFont(fpath)
-    return _font_cache[key]
+def _load_ttfont(fpath: pathlib.Path, weight: int):
+    """fontTools TTFont をロード（可変フォントなら重みを固定してキャッシュする）"""
+    normalized_weight = 700 if int(weight) >= 600 else 400
+    key = (str(fpath), normalized_weight)
+    if key in _font_cache:
+        return _font_cache[key]
+
+    from fontTools.ttLib import TTFont
+
+    ttfont = TTFont(fpath)
+    if "fvar" in ttfont:
+        try:
+            from fontTools.varLib.instancer import instantiateVariableFont
+            ttfont = instantiateVariableFont(ttfont, {"wght": normalized_weight}, inplace=False)
+        except Exception as e:
+            print(f"[outliner] 可変フォントの重み固定に失敗: {e}")
+
+    _font_cache[key] = ttfont
+    return ttfont
 
 
 # ── SVG PathPen ──
 class SVGPathCollector:
-    """fonttools Pen プロトコルを実装し、SVG path d= 文字列を収集する"""
+    """fontTools Pen プロトコルを実装し、SVG path d= 文字列を収集する"""
 
     def __init__(self):
         self.parts: list[str] = []
@@ -148,8 +189,8 @@ class SVGPathCollector:
 def glyph_to_svg_path(ttfont, glyph_name: str, scale_x: float, scale_y: float,
                        offset_x: float, offset_y: float) -> str:
     """1グリフを SVG path d= 文字列に変換。Y軸は反転（SVG座標系）"""
-    from fonttools.pens.transformPen import TransformPen
-    from fonttools.pens.pointPen import SegmentToPointPen
+    from fontTools.pens.transformPen import TransformPen
+    from fontTools.pens.pointPen import SegmentToPointPen
 
     collector = SVGPathCollector()
     # フォント座標 → SVG座標変換（Y反転）
@@ -189,12 +230,12 @@ def text_to_svg_paths(
         fpath = _get_font_path(family, weight)
         if fpath is None:
             return []
-        ttfont = _load_ttfont(fpath)
+        ttfont = _load_ttfont(fpath, weight)
     except Exception as e:
         print(f"[outliner] フォントロードエラー: {e}")
         return []
 
-    from fonttools.ttLib import TTFont
+    from fontTools.ttLib import TTFont
 
     cmap = ttfont.getBestCmap()
     glyph_set = ttfont.getGlyphSet()

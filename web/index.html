@@ -415,8 +415,8 @@
         <div id="drop-zone">
           <div class="drop-icon">📇</div>
           <div class="drop-text">ここに画像をドロップ</div>
-          <div class="drop-hint" id="drop-hint-text">PNG / JPG / PDF 対応</div>
-          <input type="file" id="file-input" accept=".png,.jpg,.jpeg,.pdf" style="display:none" />
+          <div class="drop-hint" id="drop-hint-text">PNG / JPG / WEBP / PDF 対応</div>
+          <input type="file" id="file-input" accept=".png,.jpg,.jpeg,.webp,.pdf" style="display:none" />
         </div>
       </div>
     </div>
@@ -467,7 +467,8 @@
     // ── グローバル状態 ──
     const state = {
       texts: [], shapes: [], images: [],
-      selectedItems: [] // Array of {id, type}
+      selectedItems: [], // Array of {id, type}
+      previewSvgMarkup: ''
     };
 
     let clipboard = [];
@@ -489,6 +490,11 @@
     const logoInput = document.getElementById('logo-input');
 
     let scale = 1.0;
+    const textMeasureCanvas = document.createElement('canvas');
+    const textMeasureCtx = textMeasureCanvas.getContext('2d');
+    let previewTimer = null;
+    let previewRequestToken = 0;
+    let previewAppliedSignature = '';
 
     // ── 履歴 (Undo/Redo) ──
     const historyMax = 30;
@@ -685,7 +691,14 @@
       fd.append('file', file);
       try {
         const res = await fetch('/api/convert', { method: 'POST', body: fd });
-        const data = await res.json();
+        let data = null;
+        try {
+          data = await res.json();
+        } catch {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          throw new Error('サーバー応答を解析できませんでした');
+        }
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
         if (data.error) throw new Error(data.error);
 
         state.texts = data.intermediate.texts || [];
@@ -695,6 +708,8 @@
         state.texts.forEach((t, i) => t._id = 't_' + i);
         state.shapes.forEach((s, i) => s._id = 's_' + i);
         state.images.forEach((img, i) => img._id = 'i_' + i);
+        state.previewSvgMarkup = '';
+        previewAppliedSignature = '';
 
         // 初回履歴保存
         historyState = []; historyIndex = -1;
@@ -731,6 +746,86 @@
       canvas.style.transform = `scale(${scale})`;
     }
 
+    function getElementPixelSize(el) {
+      if (!el) return { widthPx: 0, heightPx: 0 };
+      if (typeof el.getBBox === 'function') {
+        try {
+          const box = el.getBBox();
+          return { widthPx: box.width || 0, heightPx: box.height || 0 };
+        } catch (_) {}
+      }
+      return {
+        widthPx: el.offsetWidth || 0,
+        heightPx: el.offsetHeight || 0
+      };
+    }
+
+    function estimateTextBoxPx(text, fs, fw, ffStr, ls) {
+      const lines = (text || '').split('\n');
+      if (!textMeasureCtx) {
+        return {
+          widthPx: Math.max(...lines.map(line => line.length), 1) * fs,
+          heightPx: fs * Math.max(lines.length, 1) * 1.2
+        };
+      }
+      textMeasureCtx.font = `${fw} ${fs}px ${ffStr}`;
+      let widthPx = 0;
+      lines.forEach(line => {
+        const glyphCount = Math.max((line || '').length - 1, 0);
+        const measured = textMeasureCtx.measureText(line || '').width + glyphCount * ls;
+        widthPx = Math.max(widthPx, measured);
+      });
+      return {
+        widthPx: Math.max(widthPx, fs * 0.6),
+        heightPx: fs * Math.max(lines.length, 1) * 1.2
+      };
+    }
+
+    function buildCleanData() {
+      return {
+        card_size_mm: { w: 94, h: 58 },
+        texts: state.texts.map(({ _id, ...rest }) => {
+          const el = document.querySelector(`.ce[data-id="${_id}"]`);
+          const { widthPx } = getElementPixelSize(el);
+          return { ...rest, render_width: widthPx / 10 };
+        }),
+        shapes: state.shapes.map(({ _id, ...rest }) => rest),
+        images: state.images.map(({ _id, ...rest }) => rest)
+      };
+    }
+
+    function queuePreviewRender() {
+      clearTimeout(previewTimer);
+      previewTimer = setTimeout(refreshExactPreview, 160);
+    }
+
+    async function refreshExactPreview() {
+      if (uploadView.style.display !== 'none' || editorView.style.display === 'none') return;
+
+      const payload = buildCleanData();
+      const signature = JSON.stringify(payload);
+      if (signature === previewAppliedSignature) return;
+
+      const token = ++previewRequestToken;
+      try {
+        const res = await fetch('/api/build_svg', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        if (data.error) throw new Error(data.error);
+        if (token !== previewRequestToken) return;
+
+        state.previewSvgMarkup = data.svg || '';
+        previewAppliedSignature = signature;
+        renderCanvas({ skipPreviewRefresh: true });
+      } catch (err) {
+        console.error('SVG preview update failed:', err);
+      }
+    }
+
     function updateResizeBox() {
       const box = document.getElementById('resize-box');
       if (!box) return;
@@ -749,15 +844,16 @@
       if (item.type === 'shape') obj = state.shapes.find(x => x._id === item.id);
       if (item.type === 'image') obj = state.images.find(x => x._id === item.id);
       if (!obj) { box.style.display = 'none'; return; }
+      const { widthPx, heightPx } = getElementPixelSize(el);
 
       box.style.left = (obj.x * 10) + 'px';
       box.style.top = (obj.y * 10) + 'px';
-      box.style.width = el.offsetWidth + 'px';
-      box.style.height = el.offsetHeight + 'px';
+      box.style.width = widthPx + 'px';
+      box.style.height = heightPx + 'px';
       box.style.display = 'block';
     }
 
-    function renderCanvas() {
+    function renderCanvas(options = {}) {
       canvas.innerHTML = `
         <div class="canvas-border"></div>
         <div id="selection-box" style="position:absolute; border:1px dashed var(--accent); background:rgba(124,111,247,0.15); pointer-events:none; display:none; z-index:100;"></div>
@@ -774,6 +870,23 @@
            <div class="rs-handle" data-dir="lc" style="pointer-events:auto; position:absolute; left:-5px; top:calc(50% - 5px); cursor:ew-resize;"></div>
         </div>
       `;
+      const hasExactPreview = !!state.previewSvgMarkup;
+
+      if (hasExactPreview) {
+        const previewHost = document.createElement('div');
+        previewHost.id = 'exact-svg-preview';
+        previewHost.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:4;overflow:hidden;';
+        previewHost.innerHTML = state.previewSvgMarkup;
+        const svgRoot = previewHost.querySelector('svg');
+        if (svgRoot) {
+          svgRoot.style.width = '940px';
+          svgRoot.style.height = '580px';
+          svgRoot.style.display = 'block';
+          svgRoot.style.pointerEvents = 'none';
+          svgRoot.setAttribute('preserveAspectRatio', 'xMinYMin meet');
+        }
+        canvas.appendChild(previewHost);
+      }
 
       state.shapes.forEach(s => {
         const el = document.createElement('div');
@@ -784,6 +897,10 @@
         el.style.width = (s.w * 10) + 'px';
         el.style.height = (s.h * 10) + 'px';
         el.style.background = s.fill || '#ccc';
+        if (hasExactPreview) {
+          el.style.opacity = '0';
+          el.style.borderColor = 'transparent';
+        }
         if (s.type === 'circle') el.style.borderRadius = '50%';
         else if (s.type === 'rounded_rect') el.style.borderRadius = '6px';
         if (state.selectedItems.some(i => i.id === s._id)) el.classList.add('selected');
@@ -810,6 +927,7 @@
         el.style.height = '100%';
         el.style.objectFit = 'contain';
         el.style.display = 'block';
+        if (hasExactPreview) el.style.opacity = '0';
         el.style.pointerEvents = 'none'; // クリックはwrapperで受ける
         wrapper.appendChild(el);
         canvas.appendChild(wrapper);
@@ -861,19 +979,30 @@
         const lines  = (t.text || '').split('\n');
         const baseX  = t.x * 10;
         const baseY  = t.y * 10 + fs * 0.85;
+        const textBox = estimateTextBoxPx(t.text || '', fs, fw, ffStr, ls);
         g.dataset.x = baseX; g.dataset.y = t.y * 10;
-        g.dataset.w = '200'; g.dataset.h = String(fs * lines.length * 1.2);
+        g.dataset.w = String(textBox.widthPx); g.dataset.h = String(textBox.heightPx);
+
+        const hitbox = document.createElementNS(svgNS, 'rect');
+        hitbox.setAttribute('x', baseX);
+        hitbox.setAttribute('y', t.y * 10);
+        hitbox.setAttribute('width', textBox.widthPx);
+        hitbox.setAttribute('height', textBox.heightPx);
+        hitbox.setAttribute('fill', 'transparent');
+        hitbox.setAttribute('pointer-events', 'all');
+        g.appendChild(hitbox);
 
         const mk = (line, x, y, attrs) => mkText(svgNS, line, x, y, fs, fw, ffStr, ls, attrs);
 
-        switch (effect) {
+        if (!hasExactPreview) switch (effect) {
 
           case 'fukuro': { // 袋文字: 厚いStroke後ろに塗り
             const sw = strkW > 0 ? strkW : fs * 0.15;
             lines.forEach((ln, i) => g.appendChild(mk(ln, baseX, baseY + i*fs*1.2, {
-              fill: mainCol, stroke: strkCol, 'stroke-width': sw*2,
-              'paint-order': 'stroke fill', 'stroke-linejoin': 'round'
+              fill: 'none', stroke: strkCol, 'stroke-width': sw*2,
+              'stroke-linejoin': 'round', 'stroke-miterlimit': '10'
             })));
+            lines.forEach((ln, i) => g.appendChild(mk(ln, baseX, baseY + i*fs*1.2, { fill: mainCol })));
             break;
           }
 
@@ -893,12 +1022,13 @@
             const off = fs * 0.08;
             lines.forEach((ln, i) => g.appendChild(mk(ln, baseX+off, baseY+i*fs*1.2+off*0.5, {
               fill: 'none', stroke: strkCol, 'stroke-width': strkW > 0 ? strkW : fs*0.05,
-              'stroke-linejoin': 'round'
+              'stroke-linejoin': 'round', 'stroke-miterlimit': '10'
             })));
             lines.forEach((ln, i) => g.appendChild(mk(ln, baseX, baseY + i*fs*1.2, {
-              fill: mainCol, stroke: strkCol, 'stroke-width': strkW > 0 ? strkW*0.5 : fs*0.02,
-              'stroke-linejoin': 'round', 'paint-order': 'stroke fill'
+              fill: 'none', stroke: strkCol, 'stroke-width': strkW > 0 ? strkW*0.5 : fs*0.02,
+              'stroke-linejoin': 'round', 'stroke-miterlimit': '10'
             })));
+            lines.forEach((ln, i) => g.appendChild(mk(ln, baseX, baseY + i*fs*1.2, { fill: mainCol })));
             break;
           }
 
@@ -942,12 +1072,16 @@
 
           default: { // normal
             lines.forEach((ln, i) => {
-              const attrs = { fill: mainCol };
               if (strkW > 0) {
-                attrs.stroke = strkCol; attrs['stroke-width'] = strkW;
-                attrs['paint-order'] = 'stroke fill'; attrs['stroke-linejoin'] = 'round';
+                g.appendChild(mk(ln, baseX, baseY + i*fs*1.2, {
+                  fill: 'none',
+                  stroke: strkCol,
+                  'stroke-width': strkW,
+                  'stroke-linejoin': 'round',
+                  'stroke-miterlimit': '10'
+                }));
               }
-              g.appendChild(mk(ln, baseX, baseY + i*fs*1.2, attrs));
+              g.appendChild(mk(ln, baseX, baseY + i*fs*1.2, { fill: mainCol }));
             });
           }
         }
@@ -974,6 +1108,10 @@
             });
           }
         }
+      }
+
+      if (!options.skipPreviewRefresh) {
+        queuePreviewRender();
       }
     }
 
@@ -1018,8 +1156,9 @@
         if (type === 'image') resizeObj = state.images.find(x => x._id === itemId);
 
         const el = document.querySelector(`.ce[data-id="${itemId}"]`);
-        resizeStartW = el.offsetWidth / 10;
-        resizeStartH = el.offsetHeight / 10;
+        const { widthPx, heightPx } = getElementPixelSize(el);
+        resizeStartW = widthPx / 10;
+        resizeStartH = heightPx / 10;
         resizeStartObjX = resizeObj.x;
         resizeStartObjY = resizeObj.y;
         if (type === 'text') resizeStartFontSize = resizeObj.font_size;
@@ -1082,8 +1221,9 @@
           if (state.selectedItems.some(si => si.id === item._id)) return;
           const el = document.querySelector(`.ce[data-id="${item._id}"]`);
           if (!el) return;
-          const w = el.offsetWidth / 10;
-          const h = el.offsetHeight / 10;
+          const { widthPx, heightPx } = getElementPixelSize(el);
+          const w = widthPx / 10;
+          const h = heightPx / 10;
           snapLinesX.push(item.x, item.x + w / 2, item.x + w);
           snapLinesY.push(item.y, item.y + h / 2, item.y + h);
         });
@@ -1177,8 +1317,9 @@
 
       if (dragInitialStates.length === 1 && !e.altKey) {
         const d = dragInitialStates[0];
-        const w = d.el.offsetWidth / 10;
-        const h = d.el.offsetHeight / 10;
+        const { widthPx, heightPx } = getElementPixelSize(d.el);
+        const w = widthPx / 10;
+        const h = heightPx / 10;
         const SNAP_DIST = 1.0;
 
         const testX = [
@@ -1288,8 +1429,9 @@
               } else {
                 ex = parseFloat(el.style.left);
                 ey = parseFloat(el.style.top);
-                ew = el.offsetWidth;
-                eh = el.offsetHeight;
+                const { widthPx, heightPx } = getElementPixelSize(el);
+                ew = widthPx;
+                eh = heightPx;
               }
               if (!isNaN(ex) && ex < bx + bw && ex + ew > bx && ey < by + bh && ey + eh > by) {
                 newSel.push({ id: el.dataset.id, type: el.dataset.type });
@@ -1393,35 +1535,35 @@
       } else if (mode === 'bottom') {
         items.forEach(i => {
           let el = document.querySelector(`.ce[data-id="${i._id}"]`);
-          i.bottomEdge = i.y + (el ? el.offsetHeight / 10 : (i.h || 0));
+          i.bottomEdge = i.y + (el ? getElementPixelSize(el).heightPx / 10 : (i.h || 0));
         });
         target = Math.max(...items.map(i => i.bottomEdge));
         items.forEach(i => {
           let el = document.querySelector(`.ce[data-id="${i._id}"]`);
-          let h = el ? el.offsetHeight / 10 : (i.h || 0);
+          let h = el ? getElementPixelSize(el).heightPx / 10 : (i.h || 0);
           i.y = parseFloat((target - h).toFixed(2));
         });
       } else if (mode === 'right') {
         items.forEach(i => {
           let el = document.querySelector(`.ce[data-id="${i._id}"]`);
-          i.rightEdge = i.x + (el ? el.offsetWidth / 10 : (i.w || 0));
+          i.rightEdge = i.x + (el ? getElementPixelSize(el).widthPx / 10 : (i.w || 0));
         });
         target = Math.max(...items.map(i => i.rightEdge));
         items.forEach(i => {
           let el = document.querySelector(`.ce[data-id="${i._id}"]`);
-          let w = el ? el.offsetWidth / 10 : (i.w || 0);
+          let w = el ? getElementPixelSize(el).widthPx / 10 : (i.w || 0);
           i.x = parseFloat((target - w).toFixed(2));
         });
       } else if (mode === 'center') {
         let cxSum = 0;
         items.forEach(i => {
           let el = document.querySelector(`.ce[data-id="${i._id}"]`);
-          cxSum += i.x + (el ? el.offsetWidth / 20 : (i.w || 0) / 2);
+          cxSum += i.x + (el ? getElementPixelSize(el).widthPx / 20 : (i.w || 0) / 2);
         });
         target = cxSum / items.length;
         items.forEach(i => {
           let el = document.querySelector(`.ce[data-id="${i._id}"]`);
-          let w = el ? el.offsetWidth / 10 : (i.w || 0);
+          let w = el ? getElementPixelSize(el).widthPx / 10 : (i.w || 0);
           i.x = parseFloat((target - w / 2).toFixed(2));
         });
       }
@@ -1735,20 +1877,6 @@
                 </div>`)}
             </div>
           </div>
-          <div class="prop-group">
-            <label>テキスト線 (アウトライン)</label>
-            <div style="display:flex; gap:8px; align-items:center;">
-              <div style="flex:1">
-                <label style="font-size:11px;">線色</label>
-                <input type="text" id="prop-stroke-color" value="${d.stroke_color || '#000000'}" placeholder="#000000">
-              </div>
-              <div style="width:80px">
-                <label style="font-size:11px;">線幅(mm)</label>
-                <input type="number" step="0.05" min="0" id="prop-stroke-width" value="${d.stroke_width || 0}">
-              </div>
-            </div>
-            ${buildPalette('prop-stroke-color')}
-          </div>
         `;
 
 
@@ -1830,53 +1958,6 @@
       }
     }
 
-    // ── リサイズハンドル操作 ──
-    let isResizing = false;
-    let resizeDir = '';
-    let resizeObj = null;
-    let resizeStartX = 0, resizeStartY = 0;
-    let resizeStartState = null;
-
-    document.addEventListener('mousedown', e => {
-      const handle = e.target.closest('.resize-handle');
-      if (!handle) return;
-      e.stopPropagation();
-      e.preventDefault();
-      isResizing = true;
-      resizeDir = handle.dataset.dir;
-      const targetId = handle.dataset.targetId;
-      const targetType = handle.dataset.targetType;
-      resizeObj = targetType === 'shape'
-        ? state.shapes.find(x => x._id === targetId)
-        : state.images.find(x => x._id === targetId);
-      if (!resizeObj) { isResizing = false; return; }
-      resizeStartX = e.clientX;
-      resizeStartY = e.clientY;
-      resizeStartState = { x: resizeObj.x, y: resizeObj.y, w: resizeObj.w, h: resizeObj.h };
-    }, true);
-
-    document.addEventListener('mousemove', e => {
-      if (!isResizing || !resizeObj) return;
-      const dx = (e.clientX - resizeStartX) / scale / 10;
-      const dy = (e.clientY - resizeStartY) / scale / 10;
-      const s = resizeStartState;
-      const minSz = 2;
-      if (resizeDir.includes('e')) resizeObj.w = Math.max(minSz, s.w + dx);
-      if (resizeDir.includes('s')) resizeObj.h = Math.max(minSz, s.h + dy);
-      if (resizeDir.includes('w')) { resizeObj.x = s.x + dx; resizeObj.w = Math.max(minSz, s.w - dx); }
-      if (resizeDir.includes('n')) { resizeObj.y = s.y + dy; resizeObj.h = Math.max(minSz, s.h - dy); }
-      renderCanvas();
-    }, true);
-
-    document.addEventListener('mouseup', e => {
-      if (!isResizing) return;
-      isResizing = false;
-      resizeObj = null;
-      saveHistory();
-    }, true);
-
-
-
     // ── ロゴ追加 ──
     addLogoBtn.addEventListener('click', () => logoInput.click());
     logoInput.addEventListener('change', e => {
@@ -1935,29 +2016,39 @@
       dlSvgBtn.disabled = true;
       const prevHtml = dlSvgBtn.innerHTML;
       dlSvgBtn.innerHTML = '<span class="loader"></span>生成中...';
-      const triggerSvgDownload = (svgContent, fileName) => {
-        const blob = new Blob([svgContent], { type: 'image/svg+xml' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.style.display = 'none';
-        a.href = url;
-        a.download = fileName;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      const triggerSvgDownload = async (svgContent, fileName) => {
+        try {
+          const downloadRes = await fetch('/api/download', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ svg: svgContent, filename: fileName })
+          });
+          if (!downloadRes.ok) throw new Error(`download ${downloadRes.status}`);
+          const blob = await downloadRes.blob();
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.style.display = 'none';
+          a.href = url;
+          a.download = fileName;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          setTimeout(() => URL.revokeObjectURL(url), 3000);
+        } catch (err) {
+          const blob = new Blob([svgContent], { type: 'image/svg+xml' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.style.display = 'none';
+          a.href = url;
+          a.download = fileName;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          setTimeout(() => URL.revokeObjectURL(url), 3000);
+        }
       };
 
-      const cleanData = {
-        card_size_mm: { w: 94, h: 58 },
-        texts: state.texts.map(({ _id, ...rest }) => {
-          const el = document.querySelector(`.ce[data-id="${_id}"]`);
-          const render_width = el ? el.offsetWidth / 10 : 0;
-          return { ...rest, render_width };
-        }),
-        shapes: state.shapes.map(({ _id, ...rest }) => rest),
-        images: state.images.map(({ _id, ...rest }) => rest)
-      };
+      const cleanData = buildCleanData();
 
       try {
         const res = await fetch('/api/build_svg', {
@@ -1971,23 +2062,7 @@
         const svgContent = data.svg;
 
         const fileName = 'business_card_edited.svg';
-        if ('showSaveFilePicker' in window) {
-          try {
-            const handle = await window.showSaveFilePicker({
-              suggestedName: fileName,
-              types: [{ description: 'SVG ファイル', accept: { 'image/svg+xml': ['.svg'] } }],
-            });
-            const writable = await handle.createWritable();
-            await writable.write(svgContent);
-            await writable.close();
-            alert('保存が完了しました。');
-          } catch (err) {
-            if (err?.name === 'AbortError') return;
-            triggerSvgDownload(svgContent, fileName);
-          }
-        } else {
-          triggerSvgDownload(svgContent, fileName);
-        }
+        await triggerSvgDownload(svgContent, fileName);
       } catch (e) {
         alert('SVG生成エラー: ' + e.message);
       } finally {
