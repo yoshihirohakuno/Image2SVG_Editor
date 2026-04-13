@@ -795,6 +795,7 @@
     }
 
     function queuePreviewRender() {
+      if (isDragging || isResizing || isBoxSelecting) return;
       clearTimeout(previewTimer);
       previewTimer = setTimeout(refreshExactPreview, 160);
     }
@@ -817,6 +818,7 @@
         if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
         if (data.error) throw new Error(data.error);
         if (token !== previewRequestToken) return;
+        if (isDragging || isResizing || isBoxSelecting) return;
 
         state.previewSvgMarkup = data.svg || '';
         previewAppliedSignature = signature;
@@ -870,7 +872,7 @@
            <div class="rs-handle" data-dir="lc" style="pointer-events:auto; position:absolute; left:-5px; top:calc(50% - 5px); cursor:ew-resize;"></div>
         </div>
       `;
-      const hasExactPreview = !!state.previewSvgMarkup;
+      const hasExactPreview = !!state.previewSvgMarkup && !dragPreviewSuppressed;
 
       if (hasExactPreview) {
         const previewHost = document.createElement('div');
@@ -1122,6 +1124,7 @@
     let dragMoved = false;
     let dragStartX = 0, dragStartY = 0;
     let dragInitialStates = [];
+    let dragPreviewSuppressed = false;
 
     let isBoxSelecting = false;
     let boxStartX = 0, boxStartY = 0;
@@ -1137,23 +1140,47 @@
     let resizeStartFontSize = 0;
     let resizeObj = null;
 
+    function setResizeBoxRect(leftPx, topPx, widthPx, heightPx) {
+      const box = document.getElementById('resize-box');
+      if (!box) return;
+      box.style.left = leftPx + 'px';
+      box.style.top = topPx + 'px';
+      box.style.width = widthPx + 'px';
+      box.style.height = heightPx + 'px';
+      box.style.display = 'block';
+    }
+
+    function normalizeResizeDir(rawDir) {
+      if (!rawDir) return '';
+      return rawDir
+        .replace(/n/g, 't')
+        .replace(/s/g, 'b')
+        .replace(/e/g, 'r')
+        .replace(/w/g, 'l');
+    }
+
     canvas.addEventListener('mousedown', e => {
-      if (e.target.classList.contains('rs-handle')) {
+      const resizeHandle = e.target.closest('.rs-handle, .resize-handle');
+      if (resizeHandle) {
         e.stopPropagation();
         e.preventDefault();
         if (state.selectedItems.length !== 1) return;
 
         isResizing = true;
-        resizeDir = e.target.dataset.dir;
+        resizeDir = normalizeResizeDir(resizeHandle.dataset.dir);
         resizeStartX = e.clientX;
         resizeStartY = e.clientY;
 
-        const itemId = state.selectedItems[0].id;
-        const type = state.selectedItems[0].type;
+        const itemId = resizeHandle.dataset.targetId || state.selectedItems[0].id;
+        const type = resizeHandle.dataset.targetType || state.selectedItems[0].type;
 
         if (type === 'text') resizeObj = state.texts.find(x => x._id === itemId);
         if (type === 'shape') resizeObj = state.shapes.find(x => x._id === itemId);
         if (type === 'image') resizeObj = state.images.find(x => x._id === itemId);
+        if (!resizeObj) {
+          isResizing = false;
+          return;
+        }
 
         const el = document.querySelector(`.ce[data-id="${itemId}"]`);
         const { widthPx, heightPx } = getElementPixelSize(el);
@@ -1212,8 +1239,21 @@
           if (item.type === 'shape') d = state.shapes.find(x => x._id === item.id);
           if (item.type === 'image') d = state.images.find(x => x._id === item.id);
           const el = document.querySelector(`.ce[data-id="${item.id}"]`);
-          return { item: d, el, type: item.type, startX: d.x, startY: d.y };
+          const { widthPx, heightPx } = getElementPixelSize(el);
+          return {
+            item: d, el, type: item.type, startX: d.x, startY: d.y,
+            widthPx, heightPx
+          };
         }).filter(x => x.item);
+
+        if (state.previewSvgMarkup) {
+          dragPreviewSuppressed = true;
+          renderCanvas({ skipPreviewRefresh: true });
+          dragInitialStates = dragInitialStates.map(d => ({
+            ...d,
+            el: document.querySelector(`.ce[data-id="${d.item._id}"]`) || d.el
+          }));
+        }
 
         snapLinesX = [];
         snapLinesY = [];
@@ -1255,8 +1295,8 @@
 
         if (state.selectedItems[0].type === 'text') {
           let scalar = 1.0;
-          if (resizeDir === 'tc' || resizeDir === 'bc') scalar = newH / Math.max(0.1, resizeStartH);
-          else scalar = newW / Math.max(0.1, resizeStartW);
+        if (resizeDir === 'tc' || resizeDir === 'bc') scalar = newH / Math.max(0.1, resizeStartH);
+        else scalar = newW / Math.max(0.1, resizeStartW);
 
           resizeObj.font_size = Math.max(1, parseFloat((resizeStartFontSize * scalar).toFixed(2)));
           resizeObj.font_size_pt = parseFloat((resizeObj.font_size / 0.352778).toFixed(1));
@@ -1265,7 +1305,8 @@
           resizeObj.h = parseFloat(newH.toFixed(2));
         }
 
-        renderCanvas();
+        renderCanvas({ skipPreviewRefresh: true });
+        setResizeBoxRect(resizeObj.x * 10, resizeObj.y * 10, newW * 10, newH * 10);
 
         const pX = document.getElementById('prop-x');
         const pY = document.getElementById('prop-y');
@@ -1317,9 +1358,8 @@
 
       if (dragInitialStates.length === 1 && !e.altKey) {
         const d = dragInitialStates[0];
-        const { widthPx, heightPx } = getElementPixelSize(d.el);
-        const w = widthPx / 10;
-        const h = heightPx / 10;
+        const w = d.widthPx / 10;
+        const h = d.heightPx / 10;
         const SNAP_DIST = 1.0;
 
         const testX = [
@@ -1385,7 +1425,12 @@
       });
 
       if (state.selectedItems.length === 1) {
-        updateResizeBox();
+        const d = dragInitialStates[0];
+        if (d) {
+          setResizeBoxRect(d.item.x * 10, d.item.y * 10, d.widthPx, d.heightPx);
+        } else {
+          updateResizeBox();
+        }
         const xInp = document.getElementById('prop-x');
         const yInp = document.getElementById('prop-y');
         if (xInp) xInp.value = dragInitialStates[0].item.x;
@@ -1398,6 +1443,7 @@
         isResizing = false;
         resizeObj = null;
         saveHistory();
+        queuePreviewRender();
         return;
       }
 
@@ -1455,13 +1501,14 @@
       }
 
       if (isDragging) {
-        if (dragMoved) {
+        if (dragMoved || dragPreviewSuppressed) {
           renderCanvas(); // SVGテキストの正確な位置に確定
-          saveHistory();
+          if (dragMoved) saveHistory();
         }
         isDragging = false;
         dragInitialStates = [];
         dragMoved = false;
+        dragPreviewSuppressed = false;
       }
     });
 
